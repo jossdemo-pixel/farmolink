@@ -91,6 +91,24 @@ export const App: React.FC = () => {
     const [activePharmacyId, setActivePharmacyId] = useState<string | null>(null);
     const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
 
+    const isPasswordRecoveryFlow = useCallback(() => {
+        try {
+            const searchParams = new URLSearchParams(window.location.search);
+            const hashRaw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+            const hashParams = new URLSearchParams(hashRaw);
+            const pathname = window.location.pathname.toLowerCase();
+
+            return (
+                searchParams.get('type') === 'recovery' ||
+                hashParams.get('type') === 'recovery' ||
+                pathname.includes('/reset-password') ||
+                pathname.includes('/update-password')
+            );
+        } catch (e) {
+            return false;
+        }
+    }, []);
+
     const probeInternet = useCallback(async (): Promise<boolean> => {
         if (!navigator.onLine) return false;
 
@@ -126,24 +144,13 @@ export const App: React.FC = () => {
     // Detecta fluxo de recuperação de senha via URL do Supabase.
     useEffect(() => {
         try {
-            const searchParams = new URLSearchParams(window.location.search);
-            const hashRaw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
-            const hashParams = new URLSearchParams(hashRaw);
-            const pathname = window.location.pathname.toLowerCase();
-
-            const isRecovery =
-                searchParams.get('type') === 'recovery' ||
-                hashParams.get('type') === 'recovery' ||
-                pathname.includes('/reset-password') ||
-                pathname.includes('/update-password');
-
-            if (isRecovery) {
+            if (isPasswordRecoveryFlow()) {
                 setPage('reset-password');
             }
         } catch (e) {
             // Ignora parse failures de URL.
         }
-    }, []);
+    }, [isPasswordRecoveryFlow]);
     
     const syncOfflineQueue = useCallback(async () => {
         if (isSyncingQueueRef.current || !navigator.onLine) return;
@@ -392,6 +399,13 @@ export const App: React.FC = () => {
             if (currUser) {
                 setUser(currUser);
                 setLastSyncAt(getLastSyncForUser(currUser.id));
+
+                // Em recuperação de senha, mantém a tela de redefinição.
+                if (isPasswordRecoveryFlow() || page === 'reset-password' || page === 'update-password') {
+                    setPage('reset-password');
+                    return;
+                }
+
                 await loadData(currUser);
                 if (currUser.role === UserRole.PHARMACY) setPage('dashboard');
                 else if (currUser.role === UserRole.ADMIN) setPage('admin-dashboard');
@@ -402,7 +416,7 @@ export const App: React.FC = () => {
         } finally {
             setLoading(false);
         }
-    }, [loadData]);
+    }, [isPasswordRecoveryFlow, loadData, page]);
 
     useEffect(() => {
         checkSession();
@@ -625,6 +639,19 @@ export const App: React.FC = () => {
 
     const renderContent = () => {
         const hasCachedData = !!(user && getCacheForUser(user.id));
+
+        if (page === 'reset-password' || page === 'update-password') {
+            return (
+                <UpdatePasswordView
+                    onComplete={async () => {
+                        await checkSession();
+                        setPage('login');
+                        window.history.replaceState({}, document.title, '/');
+                    }}
+                />
+            );
+        }
+
         if (isOffline && !allowOfflineCachedView) {
             return (
                 <OfflineView
@@ -646,17 +673,6 @@ export const App: React.FC = () => {
         }
 
         if (!user) {
-            if (page === 'reset-password' || page === 'update-password') {
-                return (
-                    <UpdatePasswordView
-                        onComplete={async () => {
-                            await checkSession();
-                            setPage('login');
-                            window.history.replaceState({}, document.title, '/');
-                        }}
-                    />
-                );
-            }
             if (page === 'login') return <AuthView onLogin={handleLoginSuccess} onNavigate={setPage} />;
             if (page === 'terms-of-use') return <TermsOfUseView onNavigate={setPage} />;
             if (page === 'privacy-policy') return <PrivacyPolicyView onNavigate={setPage} />;
