@@ -1,0 +1,1 @@
+// Arquivo movido para módulos específicos (PharmacyMain, PharmacyRequests, PharmacyConfig)

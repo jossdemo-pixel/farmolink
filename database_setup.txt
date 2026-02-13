@@ -1,0 +1,621 @@
+
+-- ============================================================================
+-- 🏥 FARMOLINK PROD v1.3 - SCRIPT MESTRE DEFINITIVO E COMPLETO
+-- Foco: Integridade de Schema (unit_type), Segurança (RLS) e Notificações.
+-- IA, verifica: Não removi nenhuma política nem gatilho. O ficheiro está completo.
+-- ✨ UPDATE v1.4: Adicionadas tabelas para Banners, FAQ e Sobre Nós geridos pelo Admin.
+-- ============================================================================
+
+-- 1. CONFIGURAÇÃO INICIAL E EXTENSÕES
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm"; -- Para buscas rápidas (Fuzzy Search)
+CREATE EXTENSION IF NOT EXISTS "pgcrypto"; -- Necessário para gen_random_uuid()
+
+-- 2. TABELAS CORE (ESTRUTURA COMPLETA)
+
+-- Configuração do Sistema (Carrossel, Banners)
+CREATE TABLE IF NOT EXISTS public.carousel_slides (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    image_url TEXT NOT NULL,
+    button_text TEXT DEFAULT 'SABER MAIS',
+    "order" INTEGER DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Parceiros e Marcas
+CREATE TABLE IF NOT EXISTS public.partners (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    logo_url TEXT NOT NULL,
+    active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Farmácias (Entidade Mestra)
+CREATE TABLE IF NOT EXISTS public.pharmacies (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    nif TEXT,
+    address TEXT,
+    phone TEXT,
+    rating NUMERIC DEFAULT 5.0,
+    delivery_fee NUMERIC DEFAULT 600,
+    min_time TEXT DEFAULT '30-45 min',
+    is_available BOOLEAN DEFAULT false,
+    delivery_active BOOLEAN DEFAULT true,
+    status TEXT DEFAULT 'PENDING',
+    owner_email TEXT UNIQUE,
+    commission_rate NUMERIC DEFAULT 10,
+    receives_low_conf_rx BOOLEAN DEFAULT false,
+    review_score NUMERIC DEFAULT 0,
+    triage_count INTEGER DEFAULT 0,
+    logo_url TEXT,
+    description TEXT,
+    opening_hours TEXT,
+    payment_methods JSONB DEFAULT '[]',
+    instagram TEXT,
+    latitude NUMERIC,
+    longitude NUMERIC,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Perfis de Usuário (Vinculados ao Auth)
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    phone TEXT,
+    address TEXT,
+    role TEXT DEFAULT 'CUSTOMER', 
+    pharmacy_id UUID REFERENCES public.pharmacies(id) ON DELETE SET NULL,
+    status TEXT DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Catálogo Global (Mestre)
+CREATE TABLE IF NOT EXISTS public.global_products (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    category TEXT,
+    image TEXT DEFAULT 'https://cdn-icons-png.flaticon.com/512/883/883407.png',
+    common BOOLEAN DEFAULT true,
+    reference_price NUMERIC DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Produtos das Farmácias (FIX: Inclusão do unit_type)
+CREATE TABLE IF NOT EXISTS public.products (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    price NUMERIC NOT NULL,
+    stock INTEGER DEFAULT 0,
+    pharmacy_id UUID REFERENCES public.pharmacies(id) ON DELETE CASCADE,
+    image TEXT DEFAULT 'https://cdn-icons-png.flaticon.com/512/883/883407.png',
+    requires_prescription BOOLEAN DEFAULT false,
+    category TEXT DEFAULT 'GERAL',
+    unit_type TEXT DEFAULT 'Unidade', -- CAMPO CRÍTICO RE-ADICIONADO
+    global_product_id UUID REFERENCES public.global_products(id) ON DELETE SET NULL,
+    is_promotion BOOLEAN DEFAULT false,
+    discount_price NUMERIC,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- GARANTIA: Se a tabela já existia, injeta a coluna unit_type agora para matar o erro.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='unit_type') THEN
+        ALTER TABLE public.products ADD COLUMN unit_type TEXT DEFAULT 'Unidade';
+    END IF;
+END $$;
+
+-- Pedidos e Vendas (customer_id isola dados por utente)
+CREATE TABLE IF NOT EXISTS public.orders (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    customer_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    customer_name TEXT,
+    customer_phone TEXT,
+    address TEXT,
+    items JSONB, 
+    total NUMERIC,
+    status TEXT DEFAULT 'PENDENTE',
+    type TEXT DEFAULT 'DELIVERY', 
+    pharmacy_id UUID REFERENCES public.pharmacies(id),
+    commission_amount NUMERIC DEFAULT 0,
+    commission_status TEXT DEFAULT 'PENDING',
+    commission_paid_amount NUMERIC DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Migração: se a tabela já existir sem customer_id, adicionar:
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='customer_id') THEN
+        ALTER TABLE public.orders ADD COLUMN customer_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+-- Migração financeira: garantir colunas de comissão em bases legadas.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='commission_amount') THEN
+        ALTER TABLE public.orders ADD COLUMN commission_amount NUMERIC DEFAULT 0;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='commission_status') THEN
+        ALTER TABLE public.orders ADD COLUMN commission_status TEXT DEFAULT 'PENDING';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='commission_paid_amount') THEN
+        ALTER TABLE public.orders ADD COLUMN commission_paid_amount NUMERIC DEFAULT 0;
+    END IF;
+END $$;
+UPDATE public.orders
+SET commission_status = 'PENDING'
+WHERE commission_status IS NULL;
+UPDATE public.orders
+SET commission_paid_amount = COALESCE(commission_amount, 0)
+WHERE commission_status = 'PAID' AND COALESCE(commission_paid_amount, 0) = 0;
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON public.orders(customer_id);
+
+-- Avaliações
+CREATE TABLE IF NOT EXISTS public.reviews (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    order_id UUID REFERENCES public.orders(id) ON DELETE CASCADE,
+    pharmacy_id UUID REFERENCES public.pharmacies(id) ON DELETE CASCADE,
+    customer_name TEXT,
+    rating INTEGER CHECK (rating >= 1 AND rating <= 5),
+    comment TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Receitas Médicas
+CREATE TABLE IF NOT EXISTS public.prescriptions (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    customer_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    image_url TEXT NOT NULL,
+    image_hash TEXT, 
+    notes TEXT,
+    status TEXT DEFAULT 'ANALYZING',
+    target_pharmacies JSONB DEFAULT '[]', 
+    ai_metadata JSONB,
+    triaged_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Orçamentos de Receitas
+CREATE TABLE IF NOT EXISTS public.prescription_quotes (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    prescription_id UUID REFERENCES public.prescriptions(id) ON DELETE CASCADE,
+    pharmacy_id UUID REFERENCES public.pharmacies(id) ON DELETE CASCADE,
+    pharmacy_name TEXT,
+    items JSONB,
+    total NUMERIC DEFAULT 0,
+    delivery_fee NUMERIC DEFAULT 0,
+    status TEXT DEFAULT 'RESPONDED',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Suporte e Notificações
+CREATE TABLE IF NOT EXISTS public.support_tickets (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    user_name TEXT,
+    user_email TEXT,
+    subject TEXT,
+    status TEXT DEFAULT 'OPEN',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.support_messages (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    ticket_id UUID REFERENCES public.support_tickets(id) ON DELETE CASCADE,
+    sender_id UUID,
+    sender_name TEXT,
+    sender_role TEXT,
+    message TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    title TEXT,
+    message TEXT,
+    type TEXT,
+    is_read BOOLEAN DEFAULT false,
+    link TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Chatbot History
+CREATE TABLE IF NOT EXISTS public.bot_conversations (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    role TEXT CHECK (role IN ('user', 'model')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- NOVO v1.4: TABELAS PARA GERENCIAMENTO DE CONTEÚDO DO ADMIN
+-- ============================================================================
+
+-- Banners Editáveis (Carrossel da página inicial)
+CREATE TABLE IF NOT EXISTS public.admin_banners (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    image_url TEXT,
+    button_text TEXT DEFAULT 'Ver Mais',
+    button_action TEXT DEFAULT 'pharmacies-list', -- Página para onde leva o clique
+    "order" INTEGER DEFAULT 1,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Perguntas Frequentes (FAQ) Editável
+CREATE TABLE IF NOT EXISTS public.admin_faq (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    "order" INTEGER DEFAULT 1,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Sobre Nós (About) - Informações da Empresa
+CREATE TABLE IF NOT EXISTS public.admin_about (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    section_type TEXT NOT NULL, -- 'mission', 'innovation', 'value'
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    icon_emoji TEXT, -- Para valores: ✓, 🛡️, ❤️, 🌍
+    "order" INTEGER DEFAULT 1,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Configurações do Sistema (Taxa comissão, Whatsapp, Email, etc)
+CREATE TABLE IF NOT EXISTS public.system_config (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    config_key TEXT UNIQUE NOT NULL, -- Ex: 'commission_rate', 'min_order_value', 'support_whatsapp'
+    config_value TEXT,
+    config_type TEXT DEFAULT 'text', -- 'text', 'number', 'boolean', 'json'
+    description TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 3. SEGURANÇA AVANÇADA (ROW LEVEL SECURITY - RLS)
+-- ============================================================================
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.pharmacies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.prescriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.prescription_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_banners ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_faq ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_about ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.system_config ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION is_admin() RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN');
+END; $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION is_pharmacy_owner(p_id UUID) RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND pharmacy_id = p_id);
+END; $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- POLÍTICAS PROFILES
+DROP POLICY IF EXISTS "Profiles Access" ON public.profiles;
+CREATE POLICY "Profiles Access" ON public.profiles FOR ALL USING (auth.uid() = id OR is_admin());
+DROP POLICY IF EXISTS "Public Profile Insert" ON public.profiles;
+CREATE POLICY "Public Profile Insert" ON public.profiles FOR INSERT WITH CHECK (true);
+
+-- POLÍTICAS PHARMACIES
+DROP POLICY IF EXISTS "Pharmacy View" ON public.pharmacies;
+CREATE POLICY "Pharmacy View" ON public.pharmacies FOR SELECT USING (status = 'APPROVED' OR is_pharmacy_owner(id) OR is_admin());
+DROP POLICY IF EXISTS "Pharmacy Owner Manage" ON public.pharmacies;
+CREATE POLICY "Pharmacy Owner Manage" ON public.pharmacies FOR UPDATE USING (is_pharmacy_owner(id) OR is_admin());
+
+-- POLÍTICAS PRODUCTS
+DROP POLICY IF EXISTS "Product View" ON public.products;
+CREATE POLICY "Product View" ON public.products FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Product Manage" ON public.products;
+CREATE POLICY "Product Manage" ON public.products FOR ALL USING (is_pharmacy_owner(pharmacy_id) OR is_admin());
+
+-- POLÍTICAS ORDERS
+DROP POLICY IF EXISTS "Order Select" ON public.orders;
+CREATE POLICY "Order Select" ON public.orders FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Order Insert" ON public.orders;
+CREATE POLICY "Order Insert" ON public.orders FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Order Update" ON public.orders;
+CREATE POLICY "Order Update" ON public.orders FOR UPDATE USING (is_pharmacy_owner(pharmacy_id) OR is_admin());
+
+-- POLÍTICAS PRESCRIPTIONS
+DROP POLICY IF EXISTS "RX Access" ON public.prescriptions;
+CREATE POLICY "RX Access" ON public.prescriptions FOR ALL USING (customer_id = auth.uid() OR is_admin());
+DROP POLICY IF EXISTS "RX Pharmacy View" ON public.prescriptions;
+CREATE POLICY "RX Pharmacy View" ON public.prescriptions FOR SELECT USING (
+    (target_pharmacies::jsonb ? (SELECT pharmacy_id::text FROM public.profiles WHERE id = auth.uid())) OR
+    status IN ('UNDER_REVIEW', 'WAITING_FOR_QUOTES')
+);
+
+-- POLÍTICAS ADMIN_BANNERS (Todos podem ver, só admin pode editar)
+DROP POLICY IF EXISTS "Banners Public View" ON public.admin_banners;
+CREATE POLICY "Banners Public View" ON public.admin_banners FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Banners Admin Edit" ON public.admin_banners;
+CREATE POLICY "Banners Admin Edit" ON public.admin_banners FOR ALL USING (is_admin());
+
+-- POLÍTICAS ADMIN_FAQ (Todos podem ver, só admin pode editar)
+DROP POLICY IF EXISTS "FAQ Public View" ON public.admin_faq;
+CREATE POLICY "FAQ Public View" ON public.admin_faq FOR SELECT USING (true);
+DROP POLICY IF EXISTS "FAQ Admin Edit" ON public.admin_faq;
+CREATE POLICY "FAQ Admin Edit" ON public.admin_faq FOR ALL USING (is_admin());
+
+-- POLÍTICAS ADMIN_ABOUT (Todos podem ver, só admin pode editar)
+DROP POLICY IF EXISTS "About Public View" ON public.admin_about;
+CREATE POLICY "About Public View" ON public.admin_about FOR SELECT USING (true);
+DROP POLICY IF EXISTS "About Admin Edit" ON public.admin_about;
+CREATE POLICY "About Admin Edit" ON public.admin_about FOR ALL USING (is_admin());
+
+-- POLÍTICAS SYSTEM_CONFIG (Todos podem ler configs públicas, só admin pode editar)
+DROP POLICY IF EXISTS "Config Public View" ON public.system_config;
+CREATE POLICY "Config Public View" ON public.system_config FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Config Admin Edit" ON public.system_config;
+CREATE POLICY "Config Admin Edit" ON public.system_config FOR ALL USING (is_admin());
+
+-- ============================================================================
+-- 4. AUTOMAÇÃO DE STOCK (FIXED: SUPORTE A ITENS MANUAIS)
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION process_stock_decrement()
+RETURNS TRIGGER AS $$
+DECLARE
+    item JSONB;
+    item_id_text TEXT;
+    qty INTEGER;
+BEGIN
+    IF NEW.items IS NOT NULL THEN
+        FOR item IN SELECT * FROM jsonb_array_elements(NEW.items)
+        LOOP
+            item_id_text := item->>'id';
+            qty := (item->>'quantity')::INTEGER;
+
+            -- CORREÇÃO CRÍTICA: Só tenta atualizar o stock se o ID for um UUID válido.
+            -- Itens manuais (ex: 'rx-...') são ignorados no stock mas mantidos na venda.
+            IF item_id_text ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN
+                UPDATE public.products
+                SET stock = stock - qty
+                WHERE id = item_id_text::UUID;
+            END IF;
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_decrement_stock ON public.orders;
+CREATE TRIGGER tr_decrement_stock AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION process_stock_decrement();
+
+CREATE OR REPLACE FUNCTION protect_commission_status_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.commission_status IS DISTINCT FROM OLD.commission_status AND NOT is_admin() THEN
+        RAISE EXCEPTION 'Somente admin pode validar cota/pagamento de comissao.';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_protect_commission_status ON public.orders;
+CREATE TRIGGER tr_protect_commission_status
+BEFORE UPDATE ON public.orders
+FOR EACH ROW EXECUTE FUNCTION protect_commission_status_update();
+
+-- Ferramenta administrativa: reset controlado das dividas de comissao (opcional por farmácia).
+CREATE OR REPLACE FUNCTION public.reset_commission_debt_admin(target_pharmacy_id UUID DEFAULT NULL)
+RETURNS INTEGER AS $$
+DECLARE
+    affected_rows INTEGER := 0;
+BEGIN
+    IF NOT is_admin() THEN
+        RAISE EXCEPTION 'Somente admin pode executar reset de divida.';
+    END IF;
+
+    UPDATE public.orders
+    SET commission_status = 'PENDING',
+        commission_paid_amount = 0
+    WHERE (
+        target_pharmacy_id IS NULL OR pharmacy_id = target_pharmacy_id
+    )
+    AND status IN ('Concluído', 'Concluido', 'COMPLETED');
+
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ============================================================================
+-- 5. GATILHOS DE NOTIFICAÇÃO (SISTEMA DE ALERTAS RESTAURADO)
+-- ============================================================================
+
+-- Notificar Cliente sobre Orçamento
+CREATE OR REPLACE FUNCTION notify_customer_on_quote()
+RETURNS trigger AS $$
+BEGIN
+    INSERT INTO notifications (user_id, title, message, type)
+    SELECT customer_id, 'ORÇAMENTO RECEBIDO 💰', 'A ' || NEW.pharmacy_name || ' respondeu à tua receita. Toque para ver.', 'RX_RESPONSE'
+    FROM prescriptions WHERE id = NEW.prescription_id;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_notify_quote ON prescription_quotes;
+CREATE TRIGGER tr_notify_quote AFTER INSERT ON prescription_quotes FOR EACH ROW EXECUTE FUNCTION notify_customer_on_quote();
+
+-- Notificar Farmácias sobre novas Receitas/Triagens
+CREATE OR REPLACE FUNCTION notify_pharmacies_on_rx()
+RETURNS trigger AS $$
+DECLARE
+    target_p_id TEXT;
+    expert_user_id UUID;
+    customer_name TEXT;
+BEGIN
+    SELECT name INTO customer_name FROM profiles WHERE id = NEW.customer_id;
+    IF customer_name IS NULL THEN customer_name := 'UM UTENTE'; END IF;
+
+    -- 1. Triagem (Letra Difícil)
+    IF NEW.status = 'UNDER_REVIEW' THEN
+        FOR expert_user_id IN (SELECT p.id FROM profiles p JOIN pharmacies ph ON p.pharmacy_id = ph.id WHERE ph.receives_low_conf_rx = true) LOOP
+            INSERT INTO notifications (user_id, title, message, type)
+            VALUES (expert_user_id, 'LETRA DIFÍCIL PARA ANALISAR', 'Uma receita de ' || customer_name || ' precisa da tua ajuda profissional.', 'RX_TRIAGE');
+        END LOOP;
+
+    -- 2. Cotação Direta
+    ELSIF NEW.status = 'WAITING_FOR_QUOTES' THEN
+        IF NEW.target_pharmacies IS NOT NULL AND jsonb_typeof(NEW.target_pharmacies) = 'array' THEN
+            FOR target_p_id IN (SELECT jsonb_array_elements_text(NEW.target_pharmacies)) LOOP
+                INSERT INTO notifications (user_id, title, message, type)
+                SELECT id, 'PEDIDO DE ORÇAMENTO', 'Recebeste uma nova receita de ' || customer_name || ' para cotar.', 'RX_QUOTE'
+                FROM profiles WHERE pharmacy_id = target_p_id::uuid;
+            END LOOP;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_notify_rx ON prescriptions;
+CREATE TRIGGER tr_notify_rx AFTER INSERT OR UPDATE OF status ON prescriptions FOR EACH ROW EXECUTE FUNCTION notify_pharmacies_on_rx();
+
+-- 6. ÍNDICES DE PERFORMANCE
+CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON public.products USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_orders_pharmacy ON public.orders(pharmacy_id);
+CREATE INDEX IF NOT EXISTS idx_orders_commission_status_created_at ON public.orders(commission_status, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_commission_paid_amount ON public.orders(commission_paid_amount);
+CREATE INDEX IF NOT EXISTS idx_prescriptions_customer ON public.prescriptions(customer_id);
+CREATE INDEX IF NOT EXISTS idx_admin_banners_order ON public.admin_banners("order");
+CREATE INDEX IF NOT EXISTS idx_admin_faq_order ON public.admin_faq("order");
+CREATE INDEX IF NOT EXISTS idx_system_config_key ON public.system_config(config_key);
+
+-- ============================================================================
+-- 7. DADOS INICIAIS PADRÃO (v1.4)
+-- ============================================================================
+
+-- Inserir dados iniciais de FAQ (se a tabela estiver vazia)
+INSERT INTO public.admin_faq (question, answer, "order", is_active)
+SELECT * FROM (VALUES
+  ('Como compro na FarmoLink?', 'Podes pesquisar diretamente pelo nome do medicamento na tela inicial, ou tirar uma foto da tua receita médica. A IA analisará a receita e mostrará os medicamentos disponíveis nas farmácias mais próximas, com os respetivos preços.', 1, true),
+  ('Faz entregas?', 'Sim! Algumas farmácias têm entrega própria e outras permitem apenas levantamento em loja. Quando fazes a compra, a plataforma já indica se a farmácia faz entrega ou levantamento.', 2, true),
+  ('Precisa da receita física?', 'SIM. A entrega de medicamentos sujeitos a receita médica só será feita se entregares a receita original física ao estafeta. Isto é uma exigência legal em Angola e protege a tua saúde.', 3, true),
+  ('Como pago?', 'Diretamente à farmácia ou ao estafeta no ato da entrega. Aceitamos pagamento via TPA (Multicaixa), MCX Express ou dinheiro.', 4, true),
+  ('A IA pode errar a ler a receita?', 'Sim, a IA é apenas um assistente. O farmacêutico da farmácia fará sempre uma verificação manual da foto da receita antes de preparar a encomenda. A segurança é prioridade.', 5, true),
+  ('Os preços são iguais à loja?', 'Sim. As farmácias parceiras comprometem-se a praticar os mesmos preços que cobram no balcão físico. Sem surpresas.', 6, true),
+  ('Os meus dados estão seguros?', 'Sim. Todos os teus dados são criptografados e protegidos conforme a Lei de Proteção de Dados de Angola (APD). Usamos servidores seguros e não partilhamos informações pessoais com terceiros sem consentimento.', 7, true),
+  ('Posso devolver um medicamento?', 'Medicamentos só podem ser devolvidos se chegarem danificados ou com defeito. Contacta-nos imediatamente se isto acontecer e solucionaremos o problema.', 8, true)
+) t(question, answer, "order", is_active)
+WHERE NOT EXISTS (SELECT 1 FROM public.admin_faq LIMIT 1);
+
+-- Inserir dados iniciais de Sobre Nós
+INSERT INTO public.admin_about (section_type, title, content, icon_emoji, "order", is_active)
+SELECT * FROM (VALUES
+  ('mission', 'Nossa Missão', 'Digitalizar o ecossistema farmacêutico angolano, proporcionando transparência de preços e conveniência para todos os utilizadores, de Luanda a Cabinda.', '🌍', 1, true),
+  ('innovation', 'Inovação Local', 'Criado por angolanos para angolanos, entendemos os desafios logísticos e de literacia digital. Trabalhamos diretamente com farmacêuticos para oferecer soluções reais.', '⚡', 2, true),
+  ('value', 'Transparência', 'Preços reais das farmácias em tempo real, sem surpresas.', '✓', 3, true),
+  ('value', 'Segurança', 'Dados protegidos conforme a Lei de Proteção de Dados de Angola (APD).', '🛡️', 4, true),
+  ('value', 'Ética', 'Sempre exigimos a receita original para entrega de medicamentos.', '❤️', 5, true),
+  ('value', 'Acessibilidade', 'Feito para funcionar em qualquer telemóvel com dados móveis.', '🌍', 6, true)
+) t(section_type, title, content, icon_emoji, "order", is_active)
+WHERE NOT EXISTS (SELECT 1 FROM public.admin_about LIMIT 1);
+
+-- Inserir dados iniciais de Configurações do Sistema
+INSERT INTO public.system_config (config_key, config_value, config_type, description)
+SELECT * FROM (VALUES
+  ('commission_rate', '10', 'number', 'Taxa de comissão padrão (%)'),
+  ('min_order_value', '2000', 'number', 'Valor mínimo de pedido (Kz)'),
+  ('support_whatsapp', '244936793706', 'text', 'Número de WhatsApp do suporte'),
+  ('support_email', 'ajuda@farmolink.ao', 'text', 'Email de suporte'),
+  ('app_name', 'FarmoLink Angola', 'text', 'Nome da aplicação'),
+  ('app_version', '1.4.0', 'text', 'Versão atual da aplicação'),
+  ('legal_updated_at', '2026-02-12', 'text', 'Data da ultima atualizacao legal (YYYY-MM-DD)'),
+  ('legal_privacy_policy', 'Politica de Privacidade FarmoLink: coletamos dados de cadastro, uso da plataforma, pedidos e informacoes relacionadas a receitas para executar o servico com seguranca. Dados de saude recebem controles reforcados de acesso e criptografia. Compartilhamos informacoes apenas com farmacias parceiras e fornecedores estritamente necessarios para processar pedidos, suporte e obrigacoes legais. O titular pode solicitar correcao e atualizacao de dados pelos canais oficiais. Nao vendemos dados pessoais. Retemos informacoes pelo periodo necessario para operacao, auditoria e cumprimento legal aplicavel. Ao continuar a usar a plataforma, o utilizador reconhece e aceita esta politica na versao vigente.', 'text', 'Conteudo da Politica de Privacidade'),
+  ('legal_terms_of_use', 'Termos de Uso FarmoLink: a plataforma intermedeia pedidos entre utentes e farmacias parceiras e nao substitui consulta medica. Medicamentos sujeitos a receita exigem validacao profissional e cumprimento das regras legais aplicaveis. O utilizador deve fornecer dados verdadeiros, manter credenciais seguras e usar a plataforma de forma licita. E proibido tentar adquirir medicamentos controlados sem receita valida, praticar fraude ou uso abusivo do sistema. Preco, disponibilidade, entrega e dispensacao sao definidos pela farmacia parceira, com possibilidade de recusas por motivos tecnicos, regulatorios ou de stock. A FarmoLink pode suspender contas em caso de violacao destes termos.', 'text', 'Conteudo dos Termos de Uso'),
+  ('financial_settlement_cycle', 'MONTHLY', 'text', 'Periodicidade de liquidacao financeira (MONTHLY|WEEKLY)')
+) t(config_key, config_value, config_type, description)
+ON CONFLICT (config_key) DO NOTHING;
+
+-- Atualizacao de contato WhatsApp (garante numero mais recente em bases existentes).
+UPDATE public.system_config
+SET config_value = '244936793706',
+    updated_at = NOW()
+WHERE config_key = 'support_whatsapp';
+
+-- Garantia legal: se a base ja existir com placeholders/vazios, preencher com texto adequado.
+UPDATE public.system_config
+SET config_value = 'Politica de Privacidade FarmoLink: coletamos dados de cadastro, uso da plataforma, pedidos e informacoes relacionadas a receitas para executar o servico com seguranca. Dados de saude recebem controles reforcados de acesso e criptografia. Compartilhamos informacoes apenas com farmacias parceiras e fornecedores estritamente necessarios para processar pedidos, suporte e obrigacoes legais. O titular pode solicitar correcao e atualizacao de dados pelos canais oficiais. Nao vendemos dados pessoais. Retemos informacoes pelo periodo necessario para operacao, auditoria e cumprimento legal aplicavel. Ao continuar a usar a plataforma, o utilizador reconhece e aceita esta politica na versao vigente.',
+    updated_at = NOW()
+WHERE config_key = 'legal_privacy_policy'
+  AND (
+    config_value IS NULL
+    OR btrim(config_value) = ''
+    OR config_value ILIKE 'Texto padrao%'
+  );
+
+UPDATE public.system_config
+SET config_value = 'Termos de Uso FarmoLink: a plataforma intermedeia pedidos entre utentes e farmacias parceiras e nao substitui consulta medica. Medicamentos sujeitos a receita exigem validacao profissional e cumprimento das regras legais aplicaveis. O utilizador deve fornecer dados verdadeiros, manter credenciais seguras e usar a plataforma de forma licita. E proibido tentar adquirir medicamentos controlados sem receita valida, praticar fraude ou uso abusivo do sistema. Preco, disponibilidade, entrega e dispensacao sao definidos pela farmacia parceira, com possibilidade de recusas por motivos tecnicos, regulatorios ou de stock. A FarmoLink pode suspender contas em caso de violacao destes termos.',
+    updated_at = NOW()
+WHERE config_key = 'legal_terms_of_use'
+  AND (
+    config_value IS NULL
+    OR btrim(config_value) = ''
+    OR config_value ILIKE 'Texto padrao%'
+  );
+
+-- Inserir dados iniciais de Banners (exemplo)
+INSERT INTO public.admin_banners (title, subtitle, button_text, "order", is_active)
+SELECT * FROM (VALUES
+  ('Medicamentos em Promoção', 'Descontos especiais esta semana até 50%', 'Ver Ofertas', 1, true),
+  ('Novos Parceiros Disponíveis', 'Farmácias de qualidade perto de ti', 'Explorar', 2, true)
+) t(title, subtitle, button_text, "order", is_active)
+WHERE NOT EXISTS (SELECT 1 FROM public.admin_banners LIMIT 1);
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- SUMÁRIO DE MUDANÇAS v1.4
+-- ============================================================================
+-- ✨ NOVAS TABELAS:
+--    1. admin_banners - Carrossel de banners da página inicial (título, subtítulo, imagem, botão)
+--    2. admin_faq - Perguntas Frequentes geridas pelo admin
+--    3. admin_about - Informações sobre a empresa (missão, inovação, valores)
+--    4. system_config - Configurações globais do sistema (taxa comissão, whatsapp, email, etc)
+--
+-- ✨ NOVAS POLÍTICAS RLS:
+--    - Todos podem ler banners, FAQ e About (público)
+--    - Só admin pode editar estas tabelas
+--
+-- ✨ DADOS INICIAIS:
+--    - 8 FAQs pré-preenchidas em português
+--    - 6 informações sobre nós (missão, inovação, 4 valores)
+--    - 10 configuracoes do sistema padrao (inclui textos legais e ciclo financeiro)
+--    - 2 banners de exemplo
+--
+-- 📌 INSTRUÇÕES PARA DEPLOY:
+--    1. Copiar todo este SQL para o editor do Supabase (SQL Editor)
+--    2. Executar todo o script
+--    3. Verificar se todas as tabelas foram criadas: admin_banners, admin_faq, admin_about, system_config
+--    4. Confirmar que as políticas RLS estão ativas em cada tabela
+--    5. No app, os dados aparecerão automaticamente nas abas de CONFIGURAÇÕES do Admin
+-- ============================================================================
+

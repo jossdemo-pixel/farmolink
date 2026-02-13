@@ -1,0 +1,27 @@
+## Node
+node_modules/
+
+## Env
+.env
+.env.*
+!.env.example
+.venv/
+
+## Build
+dist/
+build/
+.vite/
+
+## Android/Gradle
+android/
+android/app/build/
+
+## IDE
+.vscode/
+.idea/
+
+## Misc
+.DS_Store
+~$*
+npm-debug.log
+yarn-error.log
