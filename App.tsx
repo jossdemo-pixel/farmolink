@@ -401,7 +401,7 @@ export const App: React.FC = () => {
                 setLastSyncAt(getLastSyncForUser(currUser.id));
 
                 // Em recuperação de senha, mantém a tela de redefinição.
-                if (isPasswordRecoveryFlow() || page === 'reset-password' || page === 'update-password') {
+                if (isPasswordRecoveryFlow()) {
                     setPage('reset-password');
                     return;
                 }
@@ -416,7 +416,7 @@ export const App: React.FC = () => {
         } finally {
             setLoading(false);
         }
-    }, [isPasswordRecoveryFlow, loadData, page]);
+    }, [isPasswordRecoveryFlow, loadData]);
 
     useEffect(() => {
         checkSession();
