@@ -150,9 +150,13 @@ export const togglePharmacyDelivery = async (id: string, active: boolean): Promi
 
 export const fetchFinancialReport = async (): Promise<PharmacyFinancials[]> => {
     try {
-        const { data: pharmacies } = await supabase.from('pharmacies').select('*');
+        const { data: pharmacies } = await supabase
+            .from('pharmacies')
+            .select('id, name, commission_rate');
         if (!pharmacies) return [];
-        const { data: orders } = await supabase.from('orders').select('*');
+        const { data: orders } = await supabase
+            .from('orders')
+            .select('pharmacy_id, status, total, commission_amount, commission_status, commission_paid_amount');
         const allOrders = orders || [];
 
         return pharmacies.map((p: any) => {

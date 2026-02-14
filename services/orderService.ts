@@ -43,6 +43,22 @@ const checkPrescriptionDuplicate = async (customerId: string, imageUrl: string):
     return (data?.length || 0) > 0;
 };
 
+const getCommissionRateForPharmacy = async (pharmacyId: string): Promise<number> => {
+    try {
+        const { data } = await supabase
+            .from('pharmacies')
+            .select('commission_rate')
+            .eq('id', pharmacyId)
+            .maybeSingle();
+
+        const rate = Number(data?.commission_rate);
+        if (!Number.isFinite(rate)) return 10;
+        return Math.max(0, Math.min(100, rate));
+    } catch {
+        return 10;
+    }
+};
+
 export const createPrescriptionRequest = async (
     customerId: string, 
     imageUrl: string, 
@@ -226,6 +242,9 @@ export const acceptQuoteAndCreateOrder = async (
     isDelivery: boolean
 ): Promise<{ success: boolean; error?: string }> => {
     try {
+        const commissionRate = await getCommissionRateForPharmacy(quote.pharmacyId);
+        const commissionAmount = Number(quote.totalPrice) * (commissionRate / 100);
+
         // AUTONOMIA TOTAL: O pedido é criado com os itens snapshots da cotação.
         // Se o ID for 'rx-...', o trigger do banco apenas ignorará o desconto de stock.
         const orderPayload = {
@@ -245,7 +264,7 @@ export const acceptQuoteAndCreateOrder = async (
                 pharmacyId: quote.pharmacyId,
                 image: 'https://cdn-icons-png.flaticon.com/512/883/883407.png'
             })),
-            commission_amount: Number(quote.totalPrice) * 0.1,
+            commission_amount: commissionAmount,
             commission_status: 'PENDING'
         };
 
@@ -266,10 +285,12 @@ export const createOrder = async (order: Omit<Order, 'id' | 'date'>): Promise<{ 
     return { success: false, error: "Sem internet. Nao e possivel finalizar pedido offline." };
   }
   try {
+    const commissionRate = await getCommissionRateForPharmacy(order.pharmacyId);
+    const commissionAmount = order.total * (commissionRate / 100);
     const payload: Record<string, unknown> = {
       customer_name: order.customerName, customer_phone: order.customerPhone, items: order.items,
       total: order.total, status: order.status, type: order.type, pharmacy_id: order.pharmacyId,
-      address: order.address, commission_amount: order.total * 0.1, commission_status: 'PENDING'
+      address: order.address, commission_amount: commissionAmount, commission_status: 'PENDING'
     };
     if (order.customerId) payload.customer_id = order.customerId;
     const { error } = await supabase.from('orders').insert([payload]);

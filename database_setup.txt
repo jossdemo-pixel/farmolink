@@ -337,11 +337,25 @@ CREATE POLICY "Product Manage" ON public.products FOR ALL USING (is_pharmacy_own
 
 -- POLÍTICAS ORDERS
 DROP POLICY IF EXISTS "Order Select" ON public.orders;
-CREATE POLICY "Order Select" ON public.orders FOR SELECT USING (true);
+CREATE POLICY "Order Select" ON public.orders
+FOR SELECT
+USING (
+    is_admin()
+    OR is_pharmacy_owner(pharmacy_id)
+    OR customer_id = auth.uid()
+);
 DROP POLICY IF EXISTS "Order Insert" ON public.orders;
-CREATE POLICY "Order Insert" ON public.orders FOR INSERT WITH CHECK (true);
+CREATE POLICY "Order Insert" ON public.orders
+FOR INSERT
+WITH CHECK (
+    is_admin()
+    OR customer_id = auth.uid()
+);
 DROP POLICY IF EXISTS "Order Update" ON public.orders;
-CREATE POLICY "Order Update" ON public.orders FOR UPDATE USING (is_pharmacy_owner(pharmacy_id) OR is_admin());
+CREATE POLICY "Order Update" ON public.orders
+FOR UPDATE
+USING (is_pharmacy_owner(pharmacy_id) OR is_admin())
+WITH CHECK (is_pharmacy_owner(pharmacy_id) OR is_admin());
 
 -- POLÍTICAS PRESCRIPTIONS
 DROP POLICY IF EXISTS "RX Access" ON public.prescriptions;
@@ -412,8 +426,12 @@ CREATE TRIGGER tr_decrement_stock AFTER INSERT ON public.orders FOR EACH ROW EXE
 CREATE OR REPLACE FUNCTION protect_commission_status_update()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW.commission_status IS DISTINCT FROM OLD.commission_status AND NOT is_admin() THEN
-        RAISE EXCEPTION 'Somente admin pode validar cota/pagamento de comissao.';
+    IF (
+        NEW.commission_status IS DISTINCT FROM OLD.commission_status
+        OR COALESCE(NEW.commission_paid_amount, 0) IS DISTINCT FROM COALESCE(OLD.commission_paid_amount, 0)
+        OR COALESCE(NEW.commission_amount, 0) IS DISTINCT FROM COALESCE(OLD.commission_amount, 0)
+    ) AND NOT is_admin() THEN
+        RAISE EXCEPTION 'Somente admin pode alterar campos financeiros de comissao.';
     END IF;
     RETURN NEW;
 END;
