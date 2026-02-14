@@ -3,16 +3,51 @@
  * FarmoLink Geolocation Service
  */
 
-export const getCurrentPosition = (): Promise<{lat: number, lng: number} | null> => {
+export type GeoPosition = { lat: number; lng: number; accuracy?: number };
+
+const getBrowserPosition = (options: PositionOptions): Promise<GeoPosition | null> => {
     return new Promise((resolve) => {
-        if (!navigator.geolocation) return resolve(null);
-        
+        if (!navigator.geolocation) {
+            resolve(null);
+            return;
+        }
+
         navigator.geolocation.getCurrentPosition(
-            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            (pos) => resolve({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+                accuracy: pos.coords.accuracy
+            }),
             () => resolve(null),
-            { enableHighAccuracy: true, timeout: 5000 }
+            options
         );
     });
+};
+
+export const getCurrentPosition = async (): Promise<GeoPosition | null> => {
+    const precise = await getBrowserPosition({
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+    });
+
+    if (precise && (precise.accuracy ?? Number.POSITIVE_INFINITY) <= 80) {
+        return precise;
+    }
+
+    const fallback = await getBrowserPosition({
+        enableHighAccuracy: false,
+        timeout: 7000,
+        maximumAge: 120000
+    });
+
+    if (precise && fallback) {
+        const preciseAcc = precise.accuracy ?? Number.POSITIVE_INFINITY;
+        const fallbackAcc = fallback.accuracy ?? Number.POSITIVE_INFINITY;
+        return preciseAcc <= fallbackAcc ? precise : fallback;
+    }
+
+    return precise || fallback;
 };
 
 /**

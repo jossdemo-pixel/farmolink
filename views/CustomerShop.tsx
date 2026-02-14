@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft } from 'lucide-react';
+import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft, Trash2 } from 'lucide-react';
 import { Product, Pharmacy, PRODUCT_CATEGORIES, CartItem, Order, ChatMessage } from '../types';
 import { Button, Badge, Card } from '../components/UI';
 import { playSound } from '../services/soundService';
@@ -159,44 +159,82 @@ export const HomeView = ({ products, pharmacies, onAddToCart, onNavigate, onView
 
 export const AllPharmaciesView = ({ pharmacies, onViewPharmacy }: any) => {
     const [q, setQ] = useState('');
+    const [viewFilter, setViewFilter] = useState<'ALL' | 'OPEN' | 'DELIVERY'>('ALL');
+    const openCount = pharmacies.filter((p: Pharmacy) => p.isAvailable).length;
+    const deliveryCount = pharmacies.filter((p: Pharmacy) => p.deliveryActive).length;
+
     const filtered = pharmacies
         .filter((p: Pharmacy) => normalizeText(p.name).includes(normalizeText(q)))
+        .filter((p: Pharmacy) => {
+            if (viewFilter === 'OPEN') return p.isAvailable;
+            if (viewFilter === 'DELIVERY') return p.deliveryActive;
+            return true;
+        })
         .sort((a: any, b: any) => {
             if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
-            if (a.distanceKm && b.distanceKm) return a.distanceKm - b.distanceKm;
-            return (b.review_score || 0) - (a.review_score || 0);
+            if (a.deliveryActive !== b.deliveryActive) return a.deliveryActive ? -1 : 1;
+            if (typeof a.distanceKm === 'number' && typeof b.distanceKm === 'number') return a.distanceKm - b.distanceKm;
+            return (b.review_score || b.rating || 0) - (a.review_score || a.rating || 0);
         });
 
     return (
-        <div className="space-y-8 animate-fade-in pb-20">
+        <div className="space-y-6 animate-fade-in pb-20">
             <h1 className="text-3xl font-black text-gray-800">Farmácias Parceiras</h1>
             <div className="bg-white p-2 rounded-2xl border shadow-sm flex items-center gap-3 max-w-xl">
                 <Search className="text-gray-300 ml-4" size={20}/>
                 <input placeholder="Pesquisar farmácia..." className="w-full py-4 outline-none font-bold text-gray-700" value={q} onChange={e => setQ(e.target.value)}/>
             </div>
-            <div className="grid md:grid-cols-3 gap-6">
+            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                <button
+                    onClick={() => setViewFilter('ALL')}
+                    className={`px-4 py-2 rounded-full text-[11px] font-black whitespace-nowrap transition-all ${viewFilter === 'ALL' ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-500'}`}
+                >
+                    Todas ({pharmacies.length})
+                </button>
+                <button
+                    onClick={() => setViewFilter('OPEN')}
+                    className={`px-4 py-2 rounded-full text-[11px] font-black whitespace-nowrap transition-all ${viewFilter === 'OPEN' ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-500'}`}
+                >
+                    Abertas ({openCount})
+                </button>
+                <button
+                    onClick={() => setViewFilter('DELIVERY')}
+                    className={`px-4 py-2 rounded-full text-[11px] font-black whitespace-nowrap transition-all ${viewFilter === 'DELIVERY' ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-500'}`}
+                >
+                    Com entrega ({deliveryCount})
+                </button>
+            </div>
+            <div className="space-y-4 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-6 md:space-y-0">
                 {filtered.map((p: Pharmacy) => (
-                    <div key={p.id} onClick={() => onViewPharmacy(p.id)} className="bg-white p-6 rounded-[32px] border hover:shadow-2xl cursor-pointer transition-all group">
-                        <div className="flex justify-between items-start mb-6">
-                            <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-center font-black text-xl">{p.name.charAt(0)}</div>
-                            <div className="flex flex-col items-end gap-1">
-                                <Badge color={p.isAvailable ? 'green' : 'gray'}>{p.isAvailable ? 'Loja Aberta' : 'Loja Fechada'}</Badge>
-                                <Badge color={p.deliveryActive ? 'blue' : 'gray'} className="!text-[8px]">
-                                    {p.deliveryActive ? 'Entregas Disponíveis' : 'Apenas Levantamento'}
-                                </Badge>
-                                {p.distanceKm && <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 rounded-full">A {formatDistance(p.distanceKm)} de si</span>}
+                    <div key={p.id} onClick={() => onViewPharmacy(p.id)} className="bg-white p-5 rounded-[28px] border hover:shadow-2xl cursor-pointer transition-all group">
+                        <div className="flex gap-4 items-start">
+                            <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-center font-black text-xl shrink-0">{p.name.charAt(0)}</div>
+                            <div className="min-w-0 flex-1">
+                                <div className="flex justify-between items-start gap-2">
+                                    <h3 className="text-base md:text-lg font-black text-gray-800 leading-tight line-clamp-2">{p.name}</h3>
+                                    {typeof p.distanceKm === 'number' && (
+                                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 rounded-full shrink-0">
+                                            {formatDistance(p.distanceKm)}
+                                        </span>
+                                    )}
+                                </div>
+                                <p className="text-xs text-gray-500 font-semibold mt-2 line-clamp-2">{p.address}</p>
+                                <div className="flex flex-wrap gap-2 mt-3">
+                                    <Badge color={p.isAvailable ? 'green' : 'gray'}>{p.isAvailable ? 'Loja Aberta' : 'Loja Fechada'}</Badge>
+                                    <Badge color={p.deliveryActive ? 'blue' : 'gray'} className="!text-[9px]">
+                                        {p.deliveryActive ? 'Faz Entrega' : 'Apenas Levantamento'}
+                                    </Badge>
+                                </div>
                             </div>
                         </div>
-                        <h3 className="text-xl font-black text-gray-800 mb-2">{p.name}</h3>
-                        <p className="text-xs text-gray-400 font-bold mb-6 truncate">{p.address}</p>
-                        <div className="flex justify-between items-center pt-6 border-t font-black">
+                        <div className="flex justify-between items-center pt-4 mt-4 border-t font-black">
                             <div className="flex flex-col">
                                 <span className="text-[10px] text-gray-400 uppercase">Taxa de Entrega</span>
                                 <span className={p.deliveryActive ? "text-emerald-600" : "text-gray-300 line-through"}>
                                     Kz {p.deliveryFee.toLocaleString()}
                                 </span>
                             </div>
-                            <ChevronRight className="text-gray-200 group-hover:text-emerald-600"/>
+                            <ChevronRight className="text-gray-300 group-hover:text-emerald-600"/>
                         </div>
                     </div>
                 ))}
@@ -372,7 +410,14 @@ export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAd
         playSound('click');
         const pos = await getCurrentPosition();
         if (pos) {
-            setCurrentAddress(`Coordenadas: ${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)} (Minha localização atual)`);
+            const lat = pos.lat.toFixed(6);
+            const lng = pos.lng.toFixed(6);
+            const mapUrl = `https://maps.google.com/?q=${lat},${lng}`;
+            const accuracyLine = typeof pos.accuracy === 'number' ? `Precisão GPS ~${Math.round(pos.accuracy)}m` : 'Precisão GPS indisponível';
+            setCurrentAddress(`${accuracyLine}\nGPS: ${lat}, ${lng}\nMapa: ${mapUrl}`);
+            if (typeof pos.accuracy === 'number' && pos.accuracy > 150) {
+                alert("GPS com baixa precisão. Confira no mapa e ajuste a morada manualmente.");
+            }
             playSound('success');
         } else {
             alert("Não foi possível aceder ao GPS. Verifique as permissões.");
@@ -444,10 +489,21 @@ export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAd
                                 <div key={it.id} className="bg-white p-5 rounded-3xl border flex items-center gap-4 shadow-sm">
                                     <img src={optimizeImg(it.image)} className="w-16 h-16 object-contain rounded-xl bg-gray-50 p-2" loading="lazy" alt={it.name} />
                                     <div className="flex-1"><h4 className="font-bold text-gray-800 text-sm">{formatProductNameForCustomer(it.name)}</h4><p className="text-emerald-600 font-black">Kz {(it.price * it.quantity).toLocaleString()}</p></div>
-                                    <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border">
-                                        <button disabled={isProcessing} onClick={() => updateQuantity(it.id, -1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">-</button>
-                                        <span className="font-black">{it.quantity}</span>
-                                        <button disabled={isProcessing} onClick={() => updateQuantity(it.id, 1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">+</button>
+                                    <div className="flex flex-col items-end gap-2">
+                                        <button
+                                            disabled={isProcessing}
+                                            onClick={() => updateQuantity(it.id, 0)}
+                                            className="h-8 px-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-1 hover:bg-red-100 transition-colors"
+                                            title="Remover item"
+                                        >
+                                            <Trash2 size={12} />
+                                            Remover
+                                        </button>
+                                        <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border">
+                                            <button disabled={isProcessing} onClick={() => updateQuantity(it.id, -1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">-</button>
+                                            <span className="font-black min-w-[20px] text-center">{it.quantity}</span>
+                                            <button disabled={isProcessing} onClick={() => updateQuantity(it.id, 1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">+</button>
+                                        </div>
                                     </div>
                                 </div>
                             ))}

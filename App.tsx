@@ -322,12 +322,14 @@ export const App: React.FC = () => {
 
     const updateDistances = useCallback((coords: {lat: number, lng: number}, phList: Pharmacy[]) => {
         return phList.map(ph => {
-            if (ph.latitude && ph.longitude) {
-                const dist = calculateDistance(coords.lat, coords.lng, ph.latitude, ph.longitude);
+            const hasLat = typeof ph.latitude === 'number' && Number.isFinite(ph.latitude);
+            const hasLng = typeof ph.longitude === 'number' && Number.isFinite(ph.longitude);
+            if (hasLat && hasLng) {
+                const dist = calculateDistance(coords.lat, coords.lng, ph.latitude!, ph.longitude!);
                 return { ...ph, distanceKm: dist };
             }
             return ph;
-        }).sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
+        }).sort((a, b) => (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY));
     }, []);
 
     const loadData = useCallback(async (currUser: User) => {
@@ -524,6 +526,7 @@ export const App: React.FC = () => {
         setCart(prev => {
             const updated = prev.map(item => {
                 if (item.id !== id) return item;
+                if (delta === 0) return { ...item, quantity: 0 };
                 const maxStock = typeof item.stock === 'number' ? item.stock : Infinity;
                 const nextQty = item.quantity + delta;
 

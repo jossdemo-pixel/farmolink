@@ -1,5 +1,5 @@
 ﻿
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Camera, Send, BrainCircuit, Sparkles, ShieldCheck, ChevronRight, ArrowLeft, Loader2, X, Check, MessageSquare, AlertTriangle, Truck, Store, MapPin, Activity, Info } from 'lucide-react';
 import { Pharmacy, User, Product } from '../types';
 import { Button, Card } from '../components/UI';
@@ -61,17 +61,28 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // AUTO-SELEÃ‡ÃƒO INTELIGENTE: Se o usuÃ¡rio nÃ£o escolheu nenhuma, seleciona as 5 melhores.
+  const sortedPharmacies = useMemo(() => {
+    return pharmacies
+      .filter(p => p.status === 'APPROVED' && p.isAvailable)
+      .sort((a, b) => {
+        const aDeliveryPenalty = deliveryType === 'DELIVERY' && !a.deliveryActive ? 1 : 0;
+        const bDeliveryPenalty = deliveryType === 'DELIVERY' && !b.deliveryActive ? 1 : 0;
+        if (aDeliveryPenalty !== bDeliveryPenalty) return aDeliveryPenalty - bDeliveryPenalty;
+        if (typeof a.distanceKm === 'number' && typeof b.distanceKm === 'number') return a.distanceKm - b.distanceKm;
+        return (b.review_score || b.rating || 0) - (a.review_score || a.rating || 0);
+      });
+  }, [pharmacies, deliveryType]);
+
+  const recommendedTargets = useMemo(() => {
+    if (sortedPharmacies.length === 0) return [];
+    return [sortedPharmacies[0].id];
+  }, [sortedPharmacies]);
+
   useEffect(() => {
-    if (step === 'CONFIRM' && selectedPharmacies.length === 0) {
-        const auto = pharmacies
-            .filter(p => p.status === 'APPROVED' && p.isAvailable)
-            .sort((a, b) => (b.review_score || 0) - (a.review_score || 0))
-            .slice(0, 5)
-            .map(p => p.id);
-        if (auto.length > 0) setSelectedPharmacies(auto);
+    if (step === 'CONFIRM' && selectedPharmacies.length === 0 && recommendedTargets.length > 0) {
+      setSelectedPharmacies(recommendedTargets);
     }
-  }, [step, pharmacies]);
+  }, [step, selectedPharmacies.length, recommendedTargets]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!navigator.onLine) {
@@ -109,18 +120,21 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
           alert("Sem internet. Nao foi possivel enviar a receita.");
           return;
       }
-      // VALIDAÃ‡ÃƒO FINAL: Garante que hÃ¡ farmÃ¡cias selecionadas
-      let targets = [...selectedPharmacies];
+      // Validacao final: apenas 1 farmacia por envio.
+      let targets = [...selectedPharmacies].slice(0, 1);
       if (targets.length === 0) {
-          targets = pharmacies
-            .filter(p => p.status === 'APPROVED' && p.isAvailable)
-            .slice(0, 5)
-            .map(p => p.id);
+          targets = recommendedTargets;
           
           if (targets.length === 0) {
               alert("NÃ£o hÃ¡ farmÃ¡cias disponÃ­veis no momento.");
               return;
           }
+      }
+
+      const selectedPharmacy = pharmacies.find(p => p.id === targets[0]);
+      if (deliveryType === 'DELIVERY' && selectedPharmacy && !selectedPharmacy.deliveryActive) {
+          alert("A farmÃ¡cia selecionada nÃ£o tem entrega ativa. Mude para 'Vou Buscar (Loja)' ou escolha outra farmÃ¡cia.");
+          return;
       }
 
       if (!remoteUrl) {
@@ -153,9 +167,12 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
   };
 
   const togglePharmacy = (id: string) => {
-      setSelectedPharmacies(prev => 
-          prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
-      );
+      const pharmacy = pharmacies.find(p => p.id === id);
+      if (deliveryType === 'DELIVERY' && pharmacy && !pharmacy.deliveryActive) {
+          alert("Esta farmÃ¡cia nÃ£o estÃ¡ com entrega ativa. Escolha outra ou mude para retirada em loja.");
+          return;
+      }
+      setSelectedPharmacies(prev => (prev[0] === id ? [] : [id]));
       playSound('click');
   };
 
@@ -166,7 +183,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
           <div className="space-y-10 py-10 animate-fade-in">
               <div className="text-center space-y-4">
                   <h1 className="text-4xl font-black text-gray-800 tracking-tighter">Como queres mandar a receita?</h1>
-                  <p className="text-gray-500 max-w-lg mx-auto font-medium">Escolhe a forma mais rÃ¡pida de saber preÃ§os nas melhores farmÃ¡cias de Angola.</p>
+                  <p className="text-gray-500 max-w-lg mx-auto font-medium">Escolhe a forma mais rÃ¡pida de pedir anÃ¡lise e receber resposta de uma farmÃ¡cia por vez.</p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
@@ -192,7 +209,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                           <BrainCircuit size={40} />
                       </div>
                       <h3 className="text-2xl font-black text-gray-800 mb-2">Scan Inteligente</h3>
-                      <p className="text-sm text-gray-500 font-medium leading-relaxed">A nossa IA lÃª a letra do mÃ©dico e busca preÃ§os em toda a rede agora mesmo.</p>
+                      <p className="text-sm text-gray-500 font-medium leading-relaxed">A nossa IA lÃª a letra do mÃ©dico e acelera o pedido para a farmÃ¡cia que escolheres.</p>
                       <div className="mt-8 flex items-center gap-2 text-blue-600 font-black text-xs uppercase tracking-widest">Analisar com IA <Sparkles size={16}/></div>
                   </div>
               </div>
@@ -320,14 +337,17 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
 
                       <div className="border-t border-gray-100 pt-6">
                           <div className="flex justify-between items-center mb-6">
-                              <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Destinos do Pedido</h5>
+                              <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Farmacia de Destino</h5>
                               <span className={`text-[10px] px-3 py-1 rounded-full font-black ${method === 'AI' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                  {selectedPharmacies.length > 0 ? selectedPharmacies.length : 'AUTO'} SELECIONADAS
+                                  {selectedPharmacies.length > 0 ? '1' : 'AUTO-1'} SELECIONADA
                               </span>
                           </div>
+                          <p className="text-[10px] text-gray-500 font-semibold mb-4">
+                              Para evitar pedidos em massa, cada receita e enviada para apenas uma farmacia por vez.
+                          </p>
                           
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[200px] overflow-y-auto custom-scrollbar pr-2 mb-6">
-                              {pharmacies.filter(p => p.status === 'APPROVED' && p.isAvailable).map(p => {
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[320px] overflow-y-auto custom-scrollbar pr-2 mb-6">
+                              {sortedPharmacies.map((p, index) => {
                                   // Verifica se hÃ¡ conflito de entrega
                                   const deliveryConflict = deliveryType === 'DELIVERY' && !p.deliveryActive;
                                   
@@ -335,7 +355,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                                       <div 
                                         key={p.id}
                                         onClick={() => togglePharmacy(p.id)}
-                                        className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${selectedPharmacies.includes(p.id) ? (method === 'AI' ? 'bg-blue-50 border-blue-500 shadow-md scale-[1.02]' : 'bg-emerald-50 border-emerald-500 shadow-md scale-[1.02]') : 'bg-white border-gray-50 opacity-70 hover:opacity-100'}`}
+                                        className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${selectedPharmacies.includes(p.id) ? (method === 'AI' ? 'bg-blue-50 border-blue-500 shadow-md scale-[1.02]' : 'bg-emerald-50 border-emerald-500 shadow-md scale-[1.02]') : 'bg-white border-gray-100 hover:border-gray-200'}`}
                                       >
                                           <div className="flex items-center gap-3 overflow-hidden">
                                               <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${selectedPharmacies.includes(p.id) ? (method === 'AI' ? 'bg-blue-500 text-white' : 'bg-emerald-500 text-white') : 'bg-gray-100 text-gray-400'}`}>
@@ -343,6 +363,12 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                                               </div>
                                               <div className="min-w-0">
                                                   <p className="text-[11px] font-black text-gray-800 truncate">{p.name}</p>
+                                                  {index === 0 && (
+                                                      <span className="text-[8px] font-bold text-blue-700 uppercase bg-blue-50 px-1 rounded w-fit">Recomendada</span>
+                                                  )}
+                                                  {typeof p.distanceKm === 'number' && (
+                                                      <p className="text-[9px] text-gray-500 font-bold">A {p.distanceKm.toFixed(1)} km</p>
+                                                  )}
                                                   {deliveryConflict && (
                                                       <span className="text-[8px] font-bold text-red-500 flex items-center gap-1 uppercase bg-red-50 px-1 rounded w-fit">
                                                           <X size={8}/> Sem Entrega
@@ -354,6 +380,11 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                                       </div>
                                   );
                               })}
+                              {sortedPharmacies.length === 0 && (
+                                  <div className="col-span-full p-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50 text-center">
+                                      <p className="text-[10px] font-bold text-gray-500 uppercase">Nenhuma farmacia disponivel no momento</p>
+                                  </div>
+                              )}
                           </div>
                       </div>
 
@@ -377,7 +408,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                         className={`w-full py-6 rounded-[32px] font-black text-xl shadow-2xl active:scale-95 transition-all text-white ${method === 'AI' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-100' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'}`}
                       >
                           {isSending ? <Loader2 className="animate-spin mr-2" /> : <Send size={24} className="mr-2"/>}
-                          {method === 'AI' ? 'PEDIR ORÃ‡AMENTOS' : 'SABER PREÃ‡OS AGORA'}
+                          {method === 'AI' ? 'PEDIR ORÃ‡AMENTO' : 'ENVIAR PEDIDO AGORA'}
                       </Button>
                   </div>
               </div>
