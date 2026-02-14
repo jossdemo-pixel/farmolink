@@ -25,63 +25,67 @@ export const AdminOverview = ({ setView }: any) => {
     return (
         <div className="space-y-8 animate-fade-in pb-10">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <div onClick={() => setView('admin-users')} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition-all flex items-center justify-between group">
+                <div onClick={() => setView('admin-users')} className="bg-gradient-to-br from-blue-50 via-white to-indigo-100 p-6 rounded-3xl shadow-lg border-0 cursor-pointer hover:scale-[1.02] transition-all flex items-center justify-between group">
                     <div>
-                        <p className="text-gray-400 text-[10px] font-black uppercase tracking-widest mb-1">Usuários</p>
-                        <h3 className="text-3xl font-black text-gray-800">{loading ? '...' : stats.users}</h3>
+                        <p className="text-blue-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Usuarios</p>
+                        <h3 className="text-4xl font-black text-blue-950">{loading ? '...' : stats.users}</h3>
+                        <p className="text-xs font-bold text-blue-700 mt-2">Perfis ativos no ecossistema</p>
                     </div>
-                    <div className="p-4 bg-blue-50 text-blue-600 rounded-2xl group-hover:bg-blue-600 group-hover:text-white transition-all">
+                    <div className="p-4 bg-blue-600 text-white rounded-2xl shadow-md transition-all">
                         <Users size={28}/>
                     </div>
                 </div>
-                <div onClick={() => setView('admin-pharmacies')} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition-all flex items-center justify-between group">
+                <div onClick={() => setView('admin-pharmacies')} className="bg-gradient-to-br from-emerald-50 via-white to-teal-100 p-6 rounded-3xl shadow-lg border-0 cursor-pointer hover:scale-[1.02] transition-all flex items-center justify-between group">
                     <div>
-                        <p className="text-gray-400 text-[10px] font-black uppercase tracking-widest mb-1">Parceiros</p>
+                        <p className="text-emerald-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Parceiros</p>
                         <div className="flex items-baseline gap-2">
-                            <h3 className="text-3xl font-black text-gray-800">{loading ? '...' : stats.pharmacies}</h3>
+                            <h3 className="text-4xl font-black text-emerald-900">{loading ? '...' : stats.pharmacies}</h3>
                             {!loading && (
-                                <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
-                                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
+                                <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                                    <div className="w-1.5 h-1.5 bg-emerald-600 rounded-full animate-pulse"></div>
                                     {onlinePharmacies} Online
                                 </span>
                             )}
                         </div>
+                        <p className="text-xs font-bold text-emerald-700 mt-2">Rede com monitoramento em tempo real</p>
                     </div>
-                    <div className="p-4 bg-emerald-50 text-emerald-600 rounded-2xl group-hover:bg-emerald-600 group-hover:text-white transition-all">
+                    <div className="p-4 bg-emerald-600 text-white rounded-2xl shadow-md transition-all">
                         <Store size={28}/>
                     </div>
                 </div>
-                <div onClick={() => setView('admin-orders')} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition-all flex items-center justify-between group">
+                <div onClick={() => setView('admin-orders')} className="bg-gradient-to-br from-amber-50 via-white to-orange-100 p-6 rounded-3xl shadow-lg border-0 cursor-pointer hover:scale-[1.02] transition-all flex items-center justify-between group">
                     <div>
-                        <p className="text-gray-400 text-[10px] font-black uppercase tracking-widest mb-1">Ordens Hoje</p>
-                        <h3 className="text-3xl font-black text-gray-800">{loading ? '...' : stats.ordersToday}</h3>
+                        <p className="text-amber-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Ordens Hoje</p>
+                        <h3 className="text-4xl font-black text-amber-900">{loading ? '...' : stats.ordersToday}</h3>
+                        <p className="text-xs font-bold text-amber-700 mt-2">Fluxo diario da operacao</p>
                     </div>
-                    <div className="p-4 bg-orange-50 text-orange-600 rounded-2xl group-hover:bg-orange-600 group-hover:text-white transition-all">
+                    <div className="p-4 bg-orange-600 text-white rounded-2xl shadow-md transition-all">
                         <ShoppingBag size={28}/>
                     </div>
                 </div>
-                <div onClick={() => setView('admin-financial')} className="bg-emerald-900 p-6 rounded-3xl shadow-lg text-white flex items-center justify-between relative overflow-hidden cursor-pointer hover:scale-[1.02] transition-transform">
+                <div onClick={() => setView('admin-financial')} className="bg-gradient-to-br from-emerald-700 via-emerald-800 to-teal-900 p-6 rounded-3xl shadow-xl text-white flex items-center justify-between relative overflow-hidden cursor-pointer hover:scale-[1.02] transition-transform">
                     <div className="relative z-10">
-                        <p className="text-emerald-400 text-[10px] font-black uppercase tracking-widest mb-1">Volume do Dia</p>
-                        <h3 className="text-2xl font-black">Kz {loading ? '...' : stats.totalRevenue.toLocaleString()}</h3>
-                        <p className="text-[10px] text-emerald-300 mt-2 font-bold flex items-center gap-1"><TrendingUp size={10}/> Gestão</p>
+                        <p className="text-emerald-200 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Volume do Dia</p>
+                        <h3 className="text-3xl font-black">Kz {loading ? '...' : stats.totalRevenue.toLocaleString()}</h3>
+                        <p className="text-xs text-emerald-100 mt-2 font-bold flex items-center gap-1"><TrendingUp size={12}/> Centro financeiro ativo</p>
                     </div>
-                    <Activity size={48} className="text-emerald-800 opacity-50 relative z-10"/>
+                    <Activity size={48} className="text-emerald-200 opacity-70 relative z-10"/>
+                    <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/15 blur-sm" />
                 </div>
             </div>
             
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card title="Ações Rápidas" className="p-6">
+                <Card title="Acoes Rapidas" className="p-6 border border-blue-100 bg-gradient-to-br from-blue-50/60 via-white to-indigo-50/70 shadow-sm">
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        <Button variant="outline" className="text-xs py-3" onClick={() => setView('admin-settings')}><Settings size={14}/> Sistema</Button>
-                        <Button variant="outline" className="text-xs py-3" onClick={() => setView('admin-backup')}><ShieldCheck size={14}/> Segurança</Button>
-                        <Button variant="outline" className="text-xs py-3" onClick={() => setView('admin-catalog')}><Database size={14}/> Catálogo</Button>
+                        <Button variant="outline" className="text-xs py-3 border-blue-300 text-blue-700 hover:bg-blue-100" onClick={() => setView('admin-settings')}><Settings size={14}/> Sistema</Button>
+                        <Button variant="outline" className="text-xs py-3 border-blue-300 text-blue-700 hover:bg-blue-100" onClick={() => setView('admin-backup')}><ShieldCheck size={14}/> Seguranca</Button>
+                        <Button variant="outline" className="text-xs py-3 border-blue-300 text-blue-700 hover:bg-blue-100" onClick={() => setView('admin-catalog')}><Database size={14}/> Catalogo</Button>
                     </div>
                 </Card>
-                <div className="bg-white p-8 rounded-3xl border border-dashed border-gray-200 flex flex-col justify-center items-center text-center">
-                    <History size={24} className="text-gray-300 mb-2"/>
-                    <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">Atividade Recente</p>
-                    <p className="text-xs text-gray-400">Monitoramento da rede FarmoLink.</p>
+                <div className="bg-gradient-to-br from-slate-800 via-slate-900 to-emerald-900 p-8 rounded-3xl border border-white/10 flex flex-col justify-center items-center text-center shadow-xl">
+                    <History size={24} className="text-emerald-300 mb-2"/>
+                    <p className="text-sm font-black text-white uppercase tracking-widest">Atividade Recente</p>
+                    <p className="text-xs text-emerald-100">Monitoramento central da rede FarmoLink.</p>
                 </div>
             </div>
         </div>

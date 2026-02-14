@@ -122,27 +122,35 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLoginClick, onNaviga
                     ))}
                 </div>
 
-                {/* CONTROLES DISCRETOS E FLUTUANTES NA BASE - REDESIGN */}
                 {slides.length > 1 && (
-                    <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-6 bg-black/30 backdrop-blur-xl px-8 py-3.5 rounded-full border border-white/20 shadow-2xl">
-                        <button onClick={prevSlide} className="text-white/50 hover:text-white transition-all hover:scale-110 active:scale-90">
-                            <ChevronLeft size={24}/>
+                    <>
+                        <button
+                            onClick={prevSlide}
+                            aria-label="Slide anterior"
+                            className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 z-30 h-8 w-8 md:h-10 md:w-10 rounded-full bg-black/35 border border-white/30 text-white/80 hover:text-white hover:bg-black/55 active:scale-95 transition-all flex items-center justify-center"
+                        >
+                            <ChevronLeft size={16} className="md:w-5 md:h-5" />
                         </button>
-                        
-                        <div className="flex gap-2.5">
+
+                        <button
+                            onClick={nextSlide}
+                            aria-label="Próximo slide"
+                            className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 z-30 h-8 w-8 md:h-10 md:w-10 rounded-full bg-black/35 border border-white/30 text-white/80 hover:text-white hover:bg-black/55 active:scale-95 transition-all flex items-center justify-center"
+                        >
+                            <ChevronRight size={16} className="md:w-5 md:h-5" />
+                        </button>
+
+                        <div className="absolute bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 z-30 flex gap-2 rounded-full bg-black/25 backdrop-blur-sm px-3 py-2 border border-white/20">
                             {slides.map((_, idx) => (
-                                <button 
-                                    key={idx} 
+                                <button
+                                    key={idx}
                                     onClick={() => setCurrentSlide(idx)}
-                                    className={`h-2.5 rounded-full transition-all duration-500 ${currentSlide === idx ? 'w-10 bg-emerald-400' : 'w-2.5 bg-white/20 hover:bg-white/40'}`}
+                                    aria-label={`Ir para slide ${idx + 1}`}
+                                    className={`h-2 rounded-full transition-all duration-300 ${currentSlide === idx ? 'w-7 bg-emerald-400' : 'w-2 bg-white/40 hover:bg-white/70'}`}
                                 />
                             ))}
                         </div>
-
-                        <button onClick={nextSlide} className="text-white/50 hover:text-white transition-all hover:scale-110 active:scale-90">
-                            <ChevronRight size={24}/>
-                        </button>
-                    </div>
+                    </>
                 )}
             </div>
 

@@ -39,8 +39,8 @@ export const LoadingOverlay = () => (
 );
 
 export const Card: React.FC<React.HTMLAttributes<HTMLDivElement> & { title?: string }> = ({ children, className = '', title, ...props }) => (
-  <div className={`bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden ${className}`} {...props}>
-    {title && <div className="px-6 py-4 border-b border-gray-100 font-semibold text-lg text-gray-800">{title}</div>}
+  <div className={`bg-white/95 rounded-2xl shadow-md border border-white/70 overflow-hidden backdrop-blur-sm ${className}`} {...props}>
+    {title && <div className="px-6 py-4 border-b border-gray-100/80 font-black text-lg text-gray-800 tracking-tight">{title}</div>}
     <div className="p-6 text-gray-800">
       {children}
     </div>
@@ -57,7 +57,7 @@ export const Badge: React.FC<{ children: React.ReactNode, color?: 'green' | 'blu
   };
 
   return (
-    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${colors[color]} ${className}`}>
+    <span className={`px-3 py-1 rounded-full text-[11px] font-bold ${colors[color]} ${className}`}>
       {children}
     </span>
   );

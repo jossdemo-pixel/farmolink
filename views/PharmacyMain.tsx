@@ -123,20 +123,20 @@ export const PharmacyOverview = ({ stats, pharmacyId, onRefresh, setView }: any)
                 setView(target);
             }} />}
 
-            <div className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="bg-gradient-to-br from-blue-50 via-white to-cyan-100 p-6 rounded-[32px] shadow-lg border-0 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="flex-1 text-center md:text-left">
                     <div className="flex items-center justify-center md:justify-start gap-2">
-                        <h1 className="text-xl font-black text-gray-800 uppercase tracking-tight">Monitor Operacional</h1>
+                        <h1 className="text-2xl font-black text-blue-950 uppercase tracking-tight">Monitor Operacional</h1>
                         {myPharmacy?.receives_low_conf_rx && (
                             <span className="bg-orange-50 text-orange-600 text-[9px] font-black px-2 py-1 rounded-full flex items-center gap-1 border border-orange-100 animate-pulse">
                                 <BrainCircuit size={10}/> MODO ESPECIALISTA
                             </span>
                         )}
                     </div>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Sincronizado via FarmoLink Core</p>
+                    <p className="text-xs text-blue-700 font-bold uppercase tracking-widest mt-1">Sincronizado via FarmoLink Core</p>
                 </div>
                 
-                <div className="flex items-center gap-4 bg-gray-50 p-2 px-6 rounded-[22px] border border-gray-100">
+                <div className="flex items-center gap-4 bg-white/80 backdrop-blur-sm p-2 px-6 rounded-[22px] border border-blue-200">
                     <div className="flex items-center gap-3 border-r pr-4">
                         <span className={`text-[9px] font-black uppercase ${myPharmacy?.isAvailable ? 'text-emerald-600' : 'text-gray-400'}`}>ABERTA</span>
                         <button onClick={() => handleToggle('ONLINE')} disabled={!!toggling} className={`relative inline-flex h-8 w-14 items-center rounded-full transition-all ${myPharmacy?.isAvailable ? 'bg-emerald-500' : 'bg-gray-300'}`}>
@@ -153,21 +153,25 @@ export const PharmacyOverview = ({ stats, pharmacyId, onRefresh, setView }: any)
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                <Card className="p-6 border-l-4 border-blue-500 cursor-pointer hover:shadow-lg transition-all" onClick={() => setView('pharmacy-orders')}>
-                    <p className="text-gray-400 text-[10px] font-black uppercase mb-1">Vendas Ativas</p>
-                    <h3 className="text-4xl font-black text-gray-800">{stats?.pendingOrders || 0}</h3>
+                <Card className="p-6 border-0 bg-gradient-to-br from-blue-50 via-white to-indigo-100 cursor-pointer hover:shadow-xl hover:scale-[1.02] transition-all" onClick={() => setView('pharmacy-orders')}>
+                    <p className="text-blue-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Vendas Ativas</p>
+                    <h3 className="text-4xl font-black text-blue-950">{stats?.pendingOrders || 0}</h3>
+                    <p className="text-xs font-bold text-blue-700 mt-2">Pedidos que exigem acao imediata</p>
                 </Card>
-                <Card className="p-6 border-l-4 border-orange-500 cursor-pointer hover:shadow-lg transition-all" onClick={() => setView('pharmacy-requests')}>
-                    <p className="text-gray-400 text-[10px] font-black uppercase mb-1">Receitas / IA</p>
-                    <h3 className="text-4xl font-black text-orange-600">{stats?.rxCount || 0}</h3>
+                <Card className="p-6 border-0 bg-gradient-to-br from-amber-50 via-white to-orange-100 cursor-pointer hover:shadow-xl hover:scale-[1.02] transition-all" onClick={() => setView('pharmacy-requests')}>
+                    <p className="text-amber-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Receitas / IA</p>
+                    <h3 className="text-4xl font-black text-amber-700">{stats?.rxCount || 0}</h3>
+                    <p className="text-xs font-bold text-amber-700 mt-2">Solicitacoes de triagem e cotacao</p>
                 </Card>
-                <Card className="p-6 border-l-4 border-emerald-500">
-                    <p className="text-gray-400 text-[10px] font-black uppercase mb-1">Receita Hoje</p>
-                    <h3 className="text-3xl font-black text-emerald-600">Kz {stats?.revenue?.toLocaleString()}</h3>
+                <Card className="p-6 border-0 bg-gradient-to-br from-emerald-50 via-white to-teal-100 shadow-lg">
+                    <p className="text-emerald-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Receita Hoje</p>
+                    <h3 className="text-3xl font-black text-emerald-700">Kz {stats?.revenue?.toLocaleString()}</h3>
+                    <p className="text-xs font-bold text-emerald-700 mt-2">Faturamento consolidado do dia</p>
                 </Card>
-                <Card className="p-6 border-l-4 border-purple-500">
-                    <p className="text-gray-400 text-[10px] font-black uppercase mb-1">Reputação</p>
-                    <h3 className="text-4xl font-black text-gray-800 flex items-center gap-2">5.0 <Star className="fill-purple-500 text-purple-500" size={24}/></h3>
+                <Card className="p-6 border-0 bg-gradient-to-br from-fuchsia-50 via-white to-purple-100 shadow-lg">
+                    <p className="text-purple-700 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Reputacao</p>
+                    <h3 className="text-4xl font-black text-purple-800 flex items-center gap-2">5.0 <Star className="fill-purple-500 text-purple-500" size={24}/></h3>
+                    <p className="text-xs font-bold text-purple-700 mt-2">Confianca percebida pelos utentes</p>
                 </Card>
             </div>
         </div>
