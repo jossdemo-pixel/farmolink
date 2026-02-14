@@ -476,7 +476,7 @@ const fetchOrderRowsForPeriod = async (pharmacyId: string, periodKey: string, cy
     return { data: data || [], error };
 };
 
-export const applyCommissionPaymentByPeriodByAdmin = async (
+const applyCommissionPaymentByPeriodByAdminLegacy = async (
     pharmacyId: string,
     periodKey: string,
     cycle: SettlementCycle,
@@ -568,6 +568,26 @@ export const applyCommissionPaymentByPeriodByAdmin = async (
 
 export const resetCommissionDebtByAdmin = async (pharmacyId?: string): Promise<{ success: boolean, updatedCount: number, error?: string }> => {
     try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('reset_commission_debt_admin', {
+            target_pharmacy_id: pharmacyId || null
+        } as any);
+
+        if (!rpcError) {
+            localStorage.removeItem(FINANCIAL_CACHE_KEY);
+            return { success: true, updatedCount: Number(rpcData || 0) };
+        }
+
+        const rpcCode = (rpcError as any)?.code;
+        const rpcMsg = (rpcError as any)?.message || '';
+        const shouldFallback =
+            rpcCode === '42883' ||
+            rpcCode === 'PGRST202' ||
+            rpcMsg.includes('reset_commission_debt_admin');
+
+        if (!shouldFallback) {
+            return { success: false, updatedCount: 0, error: rpcMsg || 'Falha ao executar reset financeiro.' };
+        }
+
         let query = supabase
             .from('orders')
             .update({
@@ -960,6 +980,57 @@ export const saveLegalContent = async (legal: LegalContent): Promise<boolean> =>
     } catch (e) {
         console.error("Erro saveLegalContent:", e);
         return false;
+    }
+};
+
+export const applyCommissionPaymentByPeriodByAdmin = async (
+    pharmacyId: string,
+    periodKey: string,
+    cycle: SettlementCycle,
+    paymentAmount?: number
+): Promise<{ success: boolean, updatedCount: number, appliedAmount: number, remainingAmount: number, error?: string }> => {
+    try {
+        const payload = {
+            p_pharmacy_id: pharmacyId,
+            p_period_key: periodKey,
+            p_cycle: cycle,
+            p_payment_amount: paymentAmount && paymentAmount > 0 ? paymentAmount : null,
+            p_note: 'Liquidação registada pelo painel admin'
+        };
+
+        const { data, error } = await supabase.rpc('apply_commission_payment_by_period_admin', payload as any);
+        if (!error && Array.isArray(data) && data[0]) {
+            const row = data[0] as any;
+            localStorage.removeItem(FINANCIAL_CACHE_KEY);
+            return {
+                success: true,
+                updatedCount: Number(row.updated_count || 0),
+                appliedAmount: Number(row.applied_amount || 0),
+                remainingAmount: Number(row.remaining_amount || 0)
+            };
+        }
+
+        const errCode = (error as any)?.code;
+        const errMsg = (error as any)?.message || '';
+        const shouldFallback =
+            errCode === '42883' || // function undefined (postgres)
+            errCode === 'PGRST202' || // function not in schema cache
+            errMsg.includes('apply_commission_payment_by_period_admin');
+
+        if (shouldFallback) {
+            return applyCommissionPaymentByPeriodByAdminLegacy(pharmacyId, periodKey, cycle, paymentAmount);
+        }
+
+        return {
+            success: false,
+            updatedCount: 0,
+            appliedAmount: 0,
+            remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0,
+            error: errMsg || 'Falha ao executar liquidação financeira.'
+        };
+    } catch (e) {
+        console.error("Erro applyCommissionPaymentByPeriodByAdmin RPC:", e);
+        return applyCommissionPaymentByPeriodByAdminLegacy(pharmacyId, periodKey, cycle, paymentAmount);
     }
 };
 

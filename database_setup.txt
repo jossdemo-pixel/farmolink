@@ -291,6 +291,24 @@ CREATE TABLE IF NOT EXISTS public.system_config (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Auditoria financeira (livro-razão de comissões)
+CREATE TABLE IF NOT EXISTS public.financial_ledger (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    order_id UUID REFERENCES public.orders(id) ON DELETE SET NULL,
+    pharmacy_id UUID REFERENCES public.pharmacies(id) ON DELETE SET NULL,
+    period_key TEXT,
+    cycle TEXT DEFAULT 'MONTHLY',
+    operation_type TEXT DEFAULT 'SETTLEMENT', -- SETTLEMENT | RESET
+    note TEXT,
+    applied_amount NUMERIC DEFAULT 0,
+    before_paid_amount NUMERIC DEFAULT 0,
+    after_paid_amount NUMERIC DEFAULT 0,
+    before_status TEXT,
+    after_status TEXT,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================================================
 -- 3. SEGURANÇA AVANÇADA (ROW LEVEL SECURITY - RLS)
 -- ============================================================================
@@ -306,6 +324,7 @@ ALTER TABLE public.admin_banners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_faq ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_about ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.system_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.financial_ledger ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION is_admin() RETURNS BOOLEAN AS $$
 BEGIN
@@ -390,6 +409,12 @@ CREATE POLICY "Config Public View" ON public.system_config FOR SELECT USING (tru
 DROP POLICY IF EXISTS "Config Admin Edit" ON public.system_config;
 CREATE POLICY "Config Admin Edit" ON public.system_config FOR ALL USING (is_admin());
 
+-- POLÍTICAS FINANCIAL_LEDGER (somente admin)
+DROP POLICY IF EXISTS "Ledger Admin View" ON public.financial_ledger;
+CREATE POLICY "Ledger Admin View" ON public.financial_ledger FOR SELECT USING (is_admin());
+DROP POLICY IF EXISTS "Ledger Admin Insert" ON public.financial_ledger;
+CREATE POLICY "Ledger Admin Insert" ON public.financial_ledger FOR INSERT WITH CHECK (is_admin());
+
 -- ============================================================================
 -- 4. AUTOMAÇÃO DE STOCK (FIXED: SUPORTE A ITENS MANUAIS)
 -- ============================================================================
@@ -442,25 +467,171 @@ CREATE TRIGGER tr_protect_commission_status
 BEFORE UPDATE ON public.orders
 FOR EACH ROW EXECUTE FUNCTION protect_commission_status_update();
 
+CREATE OR REPLACE FUNCTION public.get_period_range(period_key TEXT, cycle TEXT)
+RETURNS TABLE(start_iso TIMESTAMPTZ, end_iso TIMESTAMPTZ) AS $$
+DECLARE
+    month_num INTEGER;
+    year_num INTEGER;
+    week_num INTEGER;
+    jan4 DATE;
+    week1_monday DATE;
+BEGIN
+    IF cycle = 'MONTHLY' THEN
+        month_num := split_part(period_key, '/', 1)::INTEGER;
+        year_num := split_part(period_key, '/', 2)::INTEGER;
+
+        IF month_num < 1 OR month_num > 12 OR year_num < 2000 THEN
+            RAISE EXCEPTION 'Periodo mensal invalido: %', period_key;
+        END IF;
+
+        start_iso := make_timestamptz(year_num, month_num, 1, 0, 0, 0, 'UTC');
+        end_iso := (start_iso + INTERVAL '1 month');
+        RETURN NEXT;
+        RETURN;
+    END IF;
+
+    year_num := split_part(period_key, '-W', 1)::INTEGER;
+    week_num := split_part(period_key, '-W', 2)::INTEGER;
+
+    IF week_num < 1 OR week_num > 53 OR year_num < 2000 THEN
+        RAISE EXCEPTION 'Periodo semanal invalido: %', period_key;
+    END IF;
+
+    jan4 := make_date(year_num, 1, 4);
+    week1_monday := jan4 - ((extract(isodow from jan4)::INTEGER) - 1);
+    start_iso := (week1_monday + ((week_num - 1) * 7))::TIMESTAMPTZ;
+    end_iso := start_iso + INTERVAL '7 day';
+    RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION public.apply_commission_payment_by_period_admin(
+    p_pharmacy_id UUID,
+    p_period_key TEXT,
+    p_cycle TEXT DEFAULT 'MONTHLY',
+    p_payment_amount NUMERIC DEFAULT NULL,
+    p_note TEXT DEFAULT NULL
+)
+RETURNS TABLE(updated_count INTEGER, applied_amount NUMERIC, remaining_amount NUMERIC) AS $$
+DECLARE
+    v_start TIMESTAMPTZ;
+    v_end TIMESTAMPTZ;
+    v_remaining NUMERIC;
+    v_updated INTEGER := 0;
+    v_applied NUMERIC := 0;
+    rec RECORD;
+    v_commission NUMERIC;
+    v_paid NUMERIC;
+    v_outstanding NUMERIC;
+    v_apply NUMERIC;
+    v_next_paid NUMERIC;
+    v_next_status TEXT;
+BEGIN
+    IF NOT is_admin() THEN
+        RAISE EXCEPTION 'Somente admin pode liquidar comissao.';
+    END IF;
+
+    SELECT start_iso, end_iso
+    INTO v_start, v_end
+    FROM public.get_period_range(p_period_key, p_cycle);
+
+    v_remaining := COALESCE(NULLIF(p_payment_amount, 0), 1e18);
+
+    FOR rec IN
+        SELECT id, pharmacy_id, commission_amount, commission_status, commission_paid_amount, created_at, status
+        FROM public.orders
+        WHERE pharmacy_id = p_pharmacy_id
+          AND created_at >= v_start
+          AND created_at < v_end
+          AND status IN ('Concluído', 'Concluido', 'COMPLETED')
+        ORDER BY created_at ASC
+        FOR UPDATE
+    LOOP
+        EXIT WHEN v_remaining <= 0;
+
+        v_commission := COALESCE(rec.commission_amount, 0);
+        v_paid := LEAST(
+            v_commission,
+            GREATEST(
+                0,
+                COALESCE(rec.commission_paid_amount, 0)
+                + CASE WHEN rec.commission_status = 'PAID' AND COALESCE(rec.commission_paid_amount, 0) <= 0 THEN v_commission ELSE 0 END
+            )
+        );
+        v_outstanding := GREATEST(0, v_commission - v_paid);
+        IF v_outstanding <= 0 THEN
+            CONTINUE;
+        END IF;
+
+        v_apply := LEAST(v_outstanding, v_remaining);
+        v_next_paid := v_paid + v_apply;
+        v_next_status := CASE WHEN v_next_paid >= v_commission THEN 'PAID' ELSE 'PARTIAL' END;
+
+        UPDATE public.orders
+        SET commission_paid_amount = v_next_paid,
+            commission_status = v_next_status
+        WHERE id = rec.id;
+
+        INSERT INTO public.financial_ledger (
+            order_id, pharmacy_id, period_key, cycle, operation_type, note,
+            applied_amount, before_paid_amount, after_paid_amount,
+            before_status, after_status, created_by
+        ) VALUES (
+            rec.id, rec.pharmacy_id, p_period_key, p_cycle, 'SETTLEMENT', p_note,
+            v_apply, v_paid, v_next_paid,
+            rec.commission_status, v_next_status, auth.uid()
+        );
+
+        v_updated := v_updated + 1;
+        v_applied := v_applied + v_apply;
+        v_remaining := v_remaining - v_apply;
+    END LOOP;
+
+    updated_count := v_updated;
+    applied_amount := v_applied;
+    remaining_amount := CASE WHEN p_payment_amount IS NULL OR p_payment_amount <= 0 THEN 0 ELSE GREATEST(0, v_remaining) END;
+    RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- Ferramenta administrativa: reset controlado das dividas de comissao (opcional por farmácia).
 CREATE OR REPLACE FUNCTION public.reset_commission_debt_admin(target_pharmacy_id UUID DEFAULT NULL)
 RETURNS INTEGER AS $$
 DECLARE
     affected_rows INTEGER := 0;
+    rec RECORD;
 BEGIN
     IF NOT is_admin() THEN
         RAISE EXCEPTION 'Somente admin pode executar reset de divida.';
     END IF;
 
-    UPDATE public.orders
-    SET commission_status = 'PENDING',
-        commission_paid_amount = 0
-    WHERE (
-        target_pharmacy_id IS NULL OR pharmacy_id = target_pharmacy_id
-    )
-    AND status IN ('Concluído', 'Concluido', 'COMPLETED');
+    FOR rec IN
+        SELECT id, pharmacy_id, commission_paid_amount, commission_status
+        FROM public.orders
+        WHERE (
+            target_pharmacy_id IS NULL OR pharmacy_id = target_pharmacy_id
+        )
+        AND status IN ('Concluído', 'Concluido', 'COMPLETED')
+        FOR UPDATE
+    LOOP
+        UPDATE public.orders
+        SET commission_status = 'PENDING',
+            commission_paid_amount = 0
+        WHERE id = rec.id;
 
-    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+        INSERT INTO public.financial_ledger (
+            order_id, pharmacy_id, period_key, cycle, operation_type, note,
+            applied_amount, before_paid_amount, after_paid_amount,
+            before_status, after_status, created_by
+        ) VALUES (
+            rec.id, rec.pharmacy_id, NULL, 'MONTHLY', 'RESET', 'Reset administrativo de dívida',
+            0, COALESCE(rec.commission_paid_amount, 0), 0,
+            rec.commission_status, 'PENDING', auth.uid()
+        );
+
+        affected_rows := affected_rows + 1;
+    END LOOP;
+
     RETURN affected_rows;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -526,6 +697,8 @@ CREATE INDEX IF NOT EXISTS idx_prescriptions_customer ON public.prescriptions(cu
 CREATE INDEX IF NOT EXISTS idx_admin_banners_order ON public.admin_banners("order");
 CREATE INDEX IF NOT EXISTS idx_admin_faq_order ON public.admin_faq("order");
 CREATE INDEX IF NOT EXISTS idx_system_config_key ON public.system_config(config_key);
+CREATE INDEX IF NOT EXISTS idx_financial_ledger_order ON public.financial_ledger(order_id);
+CREATE INDEX IF NOT EXISTS idx_financial_ledger_pharmacy_created ON public.financial_ledger(pharmacy_id, created_at DESC);
 
 -- ============================================================================
 -- 7. DADOS INICIAIS PADRÃO (v1.4)
