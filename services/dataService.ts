@@ -983,6 +983,69 @@ export const saveLegalContent = async (legal: LegalContent): Promise<boolean> =>
     }
 };
 
+export interface FinancialLedgerEntry {
+    id: string;
+    orderId: string | null;
+    pharmacyId: string | null;
+    periodKey: string | null;
+    cycle: string;
+    operationType: string;
+    note: string | null;
+    appliedAmount: number;
+    beforePaidAmount: number;
+    afterPaidAmount: number;
+    beforeStatus: string | null;
+    afterStatus: string | null;
+    createdBy: string | null;
+    createdAt: string;
+}
+
+export const fetchFinancialLedgerEntries = async (opts?: {
+    pharmacyId?: string;
+    limit?: number;
+}): Promise<FinancialLedgerEntry[]> => {
+    try {
+        const limit = opts?.limit ?? 150;
+        let query = supabase
+            .from('financial_ledger')
+            .select('id, order_id, pharmacy_id, period_key, cycle, operation_type, note, applied_amount, before_paid_amount, after_paid_amount, before_status, after_status, created_by, created_at')
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (opts?.pharmacyId) {
+            query = query.eq('pharmacy_id', opts.pharmacyId);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            const code = (error as any)?.code;
+            if (code === '42P01' || code === '42703') return [];
+            console.error("Erro ao carregar ledger financeiro:", error);
+            return [];
+        }
+
+        return (data || []).map((row: any) => ({
+            id: row.id,
+            orderId: row.order_id || null,
+            pharmacyId: row.pharmacy_id || null,
+            periodKey: row.period_key || null,
+            cycle: row.cycle || 'MONTHLY',
+            operationType: row.operation_type || 'SETTLEMENT',
+            note: row.note || null,
+            appliedAmount: Number(row.applied_amount || 0),
+            beforePaidAmount: Number(row.before_paid_amount || 0),
+            afterPaidAmount: Number(row.after_paid_amount || 0),
+            beforeStatus: row.before_status || null,
+            afterStatus: row.after_status || null,
+            createdBy: row.created_by || null,
+            createdAt: row.created_at
+        }));
+    } catch (e) {
+        console.error("Erro fetchFinancialLedgerEntries:", e);
+        return [];
+    }
+};
+
 export const applyCommissionPaymentByPeriodByAdmin = async (
     pharmacyId: string,
     periodKey: string,
