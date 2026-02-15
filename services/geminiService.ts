@@ -8,6 +8,127 @@ import { PrescriptionRequest } from '../types';
 
 const TIMEOUT = 30000;
 const VISION_TIMEOUT = 45000;
+const CONTEXT_LIMIT = 40;
+
+const SEARCH_STOPWORDS = new Set([
+  'a',
+  'o',
+  'os',
+  'as',
+  'de',
+  'da',
+  'do',
+  'dos',
+  'das',
+  'um',
+  'uma',
+  'para',
+  'por',
+  'com',
+  'sem',
+  'que',
+  'qual',
+  'quais',
+  'quanto',
+  'tem',
+  'tenho',
+  'queria',
+  'quero',
+  'preciso',
+  'saber',
+  'sobre',
+  'no',
+  'na',
+  'nos',
+  'nas',
+  'me',
+  'minha',
+  'meu',
+  'favor',
+  'porfavor',
+  'favor',
+]);
+
+const CATALOG_INTENT_REGEX = /\b(tem|disponivel|stock|preco|valor|custa|produto|medicamento|reservar|reserva|comprar|carrinho)\b/;
+const NON_CATALOG_INTENT_REGEX = /\b(agendar|agendamento|consulta|horario|suporte|reclamar|erro|problema|enviar receita|upload receita)\b/;
+
+const normalizeText = (value: string) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const shouldBuildProductsContext = (message: string): boolean => {
+  const normalized = normalizeText(message);
+  if (!normalized) return false;
+
+  const hasCatalogSignal = CATALOG_INTENT_REGEX.test(normalized);
+  if (hasCatalogSignal) return true;
+
+  if (NON_CATALOG_INTENT_REGEX.test(normalized)) return false;
+
+  return extractSearchTerms(message).length > 0 && normalized.split(/\s+/).length <= 5;
+};
+
+const extractSearchTerms = (message: string): string[] => {
+  const normalized = normalizeText(message).replace(/[^a-z0-9\s]/g, ' ');
+  const words = normalized
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !SEARCH_STOPWORDS.has(w));
+  return Array.from(new Set(words)).slice(0, 4);
+};
+
+const buildProductsContext = async (message: string) => {
+  const terms = extractSearchTerms(message);
+  if (terms.length === 0) return [];
+  let products: any[] = [];
+
+  const orFilter = terms.map((t) => `name.ilike.%${t}%`).join(',');
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, price, pharmacy_id, stock, requires_prescription')
+    .or(orFilter)
+    .limit(CONTEXT_LIMIT);
+  if (!error && Array.isArray(data)) products = data;
+  if (products.length === 0) return [];
+
+  const pharmacyIds = Array.from(
+    new Set(products.map((p) => String(p.pharmacy_id || '')).filter(Boolean)),
+  );
+  const pharmacyMap: Record<string, { name: string; is_available: boolean; status: string }> = {};
+
+  if (pharmacyIds.length > 0) {
+    const { data: pharmacies } = await supabase
+      .from('pharmacies')
+      .select('id, name, is_available, status')
+      .in('id', pharmacyIds);
+
+    (pharmacies || []).forEach((ph: any) => {
+      pharmacyMap[String(ph.id)] = {
+        name: String(ph.name || 'Farmacia'),
+        is_available: !!ph.is_available,
+        status: String(ph.status || ''),
+      };
+    });
+  }
+
+  return products.map((p: any) => {
+    const pharmacyId = String(p.pharmacy_id || '');
+    const meta = pharmacyMap[pharmacyId];
+    return {
+      id: p.id,
+      name: p.name,
+      price: Number(p.price || 0),
+      stock: Number(p.stock || 0),
+      requiresPrescription: !!p.requires_prescription,
+      pharmacyId,
+      pharmacyName: meta?.name || 'Farmacia',
+      pharmacyAvailable: !!meta?.is_available,
+      pharmacyStatus: meta?.status || '',
+    };
+  });
+};
 
 export type BotConversationStatus = 'bot_active' | 'escalated_pharmacy' | 'escalated_admin' | 'resolved';
 export type BotMode = 'COMMERCIAL' | 'EDUCATIONAL' | 'SENSITIVE' | 'NAVIGATION';
@@ -130,6 +251,16 @@ export const saveChatMessage = async (userId: string, role: 'user' | 'model', co
   }
 };
 
+export const clearChatHistory = async (userId: string): Promise<boolean> => {
+  try {
+    const { error } = await supabase.from('bot_conversations').delete().eq('user_id', userId);
+    return !error;
+  } catch (e) {
+    console.error('Erro ao limpar historico:', e);
+    return false;
+  }
+};
+
 export const getChatSession = () => {
   return {
     sendMessage: async ({
@@ -139,6 +270,7 @@ export const getChatSession = () => {
       userId,
       conversationId,
       pharmacyId,
+      forceNewConversation,
     }: {
       message: string;
       userName?: string;
@@ -146,22 +278,21 @@ export const getChatSession = () => {
       userId: string;
       conversationId?: string;
       pharmacyId?: string;
+      forceNewConversation?: boolean;
     }): Promise<FarmoBotMessageResult> => {
       try {
         if (!message?.trim()) {
           return { text: 'Por favor, escreva uma mensagem.', actions: [] };
         }
 
-        const { data: products } = await supabase
-          .from('products')
-          .select('id, name, price, pharmacy_id')
-          .limit(12);
-
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
 
-        const session = await supabase.auth.getSession();
-        const token = session.data.session?.access_token;
+        const [sessionResult, productsContext] = await Promise.all([
+          supabase.auth.getSession(),
+          shouldBuildProductsContext(message) ? buildProductsContext(message) : Promise.resolve([]),
+        ]);
+        const token = sessionResult.data.session?.access_token;
 
         const structuredPayload = {
           action: 'farmobot_message',
@@ -170,13 +301,9 @@ export const getChatSession = () => {
           userId,
           conversationId,
           pharmacyId,
+          forceNewConversation: !!forceNewConversation,
           history: history?.map((h) => ({ role: h.role, content: h.text || h.content })),
-          productsContext: (products || []).map((p: any) => ({
-            id: p.id,
-            name: p.name,
-            price: p.price,
-            pharmacyId: p.pharmacy_id,
-          })),
+          productsContext,
         };
 
         let { data, error } = await supabase.functions.invoke('gemini', {
@@ -192,7 +319,11 @@ export const getChatSession = () => {
               message,
               userName,
               history: history?.map((h) => ({ role: h.role, content: h.text || h.content })),
-              productsContext: (products || []).map((p: any) => ({ item: p.name, price: p.price })),
+              productsContext: productsContext.map((p: any) => ({
+                item: p.name,
+                price: p.price,
+                pharmacyName: p.pharmacyName,
+              })),
             },
             headers: token ? { Authorization: `Bearer ${token}` } : {},
           });

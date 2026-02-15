@@ -427,6 +427,8 @@ ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescription_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.support_tickets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_banners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_faq ENABLE ROW LEVEL SECURITY;
@@ -494,6 +496,56 @@ DROP POLICY IF EXISTS "RX Pharmacy View" ON public.prescriptions;
 CREATE POLICY "RX Pharmacy View" ON public.prescriptions FOR SELECT USING (
     (target_pharmacies::jsonb ? (SELECT pharmacy_id::text FROM public.profiles WHERE id = auth.uid())) OR
     status IN ('UNDER_REVIEW', 'WAITING_FOR_QUOTES')
+);
+
+-- POLÍTICAS SUPPORT_TICKETS
+DROP POLICY IF EXISTS "Support Tickets Select" ON public.support_tickets;
+CREATE POLICY "Support Tickets Select" ON public.support_tickets
+FOR SELECT
+USING (
+    user_id = auth.uid()
+    OR is_admin()
+);
+DROP POLICY IF EXISTS "Support Tickets Insert" ON public.support_tickets;
+CREATE POLICY "Support Tickets Insert" ON public.support_tickets
+FOR INSERT
+WITH CHECK (
+    user_id = auth.uid()
+    OR is_admin()
+);
+DROP POLICY IF EXISTS "Support Tickets Update" ON public.support_tickets;
+CREATE POLICY "Support Tickets Update" ON public.support_tickets
+FOR UPDATE
+USING (is_admin())
+WITH CHECK (is_admin());
+
+-- POLÍTICAS SUPPORT_MESSAGES
+DROP POLICY IF EXISTS "Support Messages Select" ON public.support_messages;
+CREATE POLICY "Support Messages Select" ON public.support_messages
+FOR SELECT
+USING (
+    is_admin()
+    OR EXISTS (
+        SELECT 1
+        FROM public.support_tickets t
+        WHERE t.id = ticket_id
+          AND t.user_id = auth.uid()
+    )
+);
+DROP POLICY IF EXISTS "Support Messages Insert" ON public.support_messages;
+CREATE POLICY "Support Messages Insert" ON public.support_messages
+FOR INSERT
+WITH CHECK (
+    is_admin()
+    OR (
+        sender_id = auth.uid()
+        AND EXISTS (
+            SELECT 1
+            FROM public.support_tickets t
+            WHERE t.id = ticket_id
+              AND t.user_id = auth.uid()
+        )
+    )
 );
 
 -- POLÍTICAS ADMIN_BANNERS (Todos podem ver, só admin pode editar)

@@ -129,6 +129,85 @@ const COMMERCIAL_KEYWORDS = [
   "carrinho",
 ];
 
+const SCHEDULING_KEYWORDS = [
+  "agendar",
+  "agendamento",
+  "marcar consulta",
+  "marcar horario",
+  "marcacao",
+  "consulta",
+];
+
+const INVENTORY_QUERY_KEYWORDS = [
+  "tem",
+  "disponivel",
+  "stock",
+  "preco",
+  "valor",
+  "quanto custa",
+  "custa",
+  "vender",
+  "mebendazol",
+];
+
+const PRODUCT_STOPWORDS = new Set([
+  "a",
+  "o",
+  "os",
+  "as",
+  "de",
+  "da",
+  "do",
+  "dos",
+  "das",
+  "um",
+  "uma",
+  "para",
+  "por",
+  "com",
+  "sem",
+  "qual",
+  "quais",
+  "quanto",
+  "tem",
+  "tenho",
+  "queria",
+  "quero",
+  "preciso",
+  "saber",
+  "sobre",
+  "no",
+  "na",
+  "nos",
+  "nas",
+  "me",
+  "minha",
+  "meu",
+  "favor",
+  "entrega",
+  "delivery",
+  "farmacia",
+  "farmacias",
+  "receita",
+  "carrinho",
+  "pedido",
+  "pedidos",
+  "app",
+  "sistema",
+  "agendar",
+  "agendamento",
+  "consulta",
+  "marcar",
+  "horario",
+  "enviar",
+  "como",
+  "ver",
+  "perto",
+  "abrir",
+  "minhas",
+  "meus",
+]);
+
 const normalize = (value: string) =>
   String(value || "")
     .normalize("NFD")
@@ -286,6 +365,187 @@ const hasResolvedIntent = (message: string) => {
   return /(obrigad|resolveu|resolvido|funcionou|ja esta bom)/.test(msg);
 };
 
+const extractProductTerms = (message: string): string[] => {
+  const msg = normalize(message).replace(/[^a-z0-9\s]/g, " ");
+  const words = msg
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !PRODUCT_STOPWORDS.has(w));
+  return Array.from(new Set(words)).slice(0, 4);
+};
+
+const hasSchedulingIntent = (message: string) =>
+  includesAny(normalize(message), SCHEDULING_KEYWORDS).length > 0;
+
+const hasInventoryIntent = (message: string) => {
+  const msg = normalize(message);
+  if (hasSchedulingIntent(message)) return false;
+  if (includesAny(msg, NAVIGATION_KEYWORDS).length > 0 && !/(tem|preco|valor|stock|disponivel|custa|vender)/.test(msg)) {
+    return false;
+  }
+  const terms = extractProductTerms(message);
+  if (terms.length === 0) return false;
+  if (includesAny(msg, INVENTORY_QUERY_KEYWORDS).length > 0) return true;
+  const wordCount = msg.split(/\s+/).filter(Boolean).length;
+  if (wordCount <= 4) return true;
+  return /(tem|preco|valor|stock|disponivel|custa|vender)/.test(msg);
+};
+
+const hasPriceIntent = (message: string) => /(preco|valor|quanto custa|custa)/.test(normalize(message));
+const wantsReserveIntent = (message: string) => /(reserv|compr|carrinho|adicionar)/.test(normalize(message));
+
+const formatKz = (value: unknown) => {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return "0";
+  return String(Math.round(num));
+};
+
+const matchProductsFromContext = (message: string, productsContext: any[]) => {
+  const msg = normalize(message);
+  const terms = extractProductTerms(message);
+  const source = Array.isArray(productsContext) ? productsContext : [];
+
+  const matched = source.filter((p: any) => {
+    const name = normalize(String(p?.name || ""));
+    if (!name) return false;
+    if (msg.includes(name)) return true;
+    return terms.some((t) => name.includes(t));
+  });
+
+  const dedupMap = new Map<string, any>();
+  matched.forEach((item: any) => {
+    const key = String(item?.id || `${item?.name}-${item?.pharmacyId}`);
+    if (!dedupMap.has(key)) dedupMap.set(key, item);
+  });
+  return Array.from(dedupMap.values()).slice(0, 3);
+};
+
+const buildSchedulingReply = () => ({
+  reply: {
+    greeting: "Ola.",
+    objective:
+      "A FarmoLink nao agenda consultas medicas pelo chat. Aqui voce pode pesquisar medicamentos, enviar receita e reservar com farmacias parceiras.",
+    safety: "Nao solicito nome ou telefone para agendamento no chat.",
+    cta: "Quer abrir Farmacias ou Enviar Receita agora?",
+  },
+  actions: [{ type: "OPEN_PHARMACIES_NEARBY" }, { type: "OPEN_UPLOAD_RX" }],
+});
+
+const buildInventoryReply = (message: string, productsContext: any[]) => {
+  const matched = matchProductsFromContext(message, productsContext);
+  const asksPrice = hasPriceIntent(message);
+  const reserveIntent = wantsReserveIntent(message);
+
+  if (matched.length === 0) {
+    return {
+      reply: {
+        greeting: "Ola.",
+        objective:
+          "Nao consegui confirmar esse produto no catalogo atual das farmacias parceiras.",
+        safety: "Para seguranca, nao confirmo disponibilidade ou preco sem registro no sistema.",
+        cta: "Quer abrir Farmacias para pesquisar ou enviar receita para validacao?",
+      },
+      actions: [{ type: "OPEN_PHARMACIES_NEARBY" }, { type: "OPEN_UPLOAD_RX" }],
+    };
+  }
+
+  const objective = matched
+    .map((m: any) => {
+      const pharmacy = String(m?.pharmacyName || "Farmacia");
+      const name = String(m?.name || "Produto");
+      const stock = Number(m?.stock || 0);
+      const pharmacyAvailable = !!m?.pharmacyAvailable && String(m?.pharmacyStatus || "").toUpperCase() === "APPROVED";
+      if (!pharmacyAvailable) {
+        return `${name} na ${pharmacy} (farmacia indisponivel no momento)`;
+      }
+      if (asksPrice) {
+        return `${name} na ${pharmacy} por Kz ${formatKz(m?.price)}${stock > 0 ? "" : " (sem stock no momento)"}`;
+      }
+      return `${name} na ${pharmacy}${stock > 0 ? " com stock" : " sem stock no momento"}`;
+    })
+    .join("; ");
+
+  const first = matched.find((m: any) =>
+    Number(m?.stock || 0) > 0 &&
+    !!m?.pharmacyAvailable &&
+    String(m?.pharmacyStatus || "").toUpperCase() === "APPROVED"
+  ) || matched[0];
+  const actions: any[] = [{ type: "OPEN_PHARMACIES_NEARBY" }];
+  if (
+    reserveIntent &&
+    first?.id &&
+    Number(first?.stock || 0) > 0 &&
+    !!first?.pharmacyAvailable &&
+    String(first?.pharmacyStatus || "").toUpperCase() === "APPROVED"
+  ) {
+    actions.push({ type: "ADD_TO_CART", payload: { productId: first.id, productName: first.name } });
+  }
+
+  return {
+    reply: {
+      greeting: "Ola.",
+      objective: `Consegui confirmar no sistema: ${objective}.`,
+      safety: matched.some((m: any) => !!m?.requiresPrescription)
+        ? "Medicamentos sujeitos a receita exigem validacao farmaceutica."
+        : "",
+      cta: reserveIntent
+        ? "Posso abrir o carrinho para continuar a reserva."
+        : "Quer ver mais farmacias ou reservar este item?",
+    },
+    actions,
+  };
+};
+
+const detectUnsafeClinicalInstruction = (reply: { greeting?: string; objective?: string; safety?: string; cta?: string }) => {
+  const merged = normalize([
+    reply.greeting || "",
+    reply.objective || "",
+    reply.safety || "",
+    reply.cta || "",
+  ].join(" "));
+
+  const hasNumericDose = /\b\d+([.,]\d+)?\s?(mg|ml|g|mcg|ui|comprimid[oa]s?|capsul[ao]s?|gotas?|unidade|unidades)\b/.test(merged);
+  const hasPosologyPattern =
+    /\b(\d+x\s+ao\s+dia|\d+\s+vezes\s+ao\s+dia|a\s+cada\s+\d+\s*h|de\s+\d+\s+em\s+\d+\s+h|de\s+\d+\s+em\s+\d+\s+horas|ao\s+deitar|em\s+jejum|apos\s+as\s+refeicoes)\b/.test(merged);
+  const hasDirectiveVerb = /\b(tome|tomar|use|usar|administre|aplique|ingerir|ingira|recomendo|indico|prescrevo)\b/.test(merged);
+  const hasDoseLexicon = /\b(dose|dosagem|posologia|quantidade|mg|ml|comprimid|capsul|gota)\b/.test(merged);
+  const hasAntibioticPrescription = merged.includes("antibiotico") && hasDirectiveVerb;
+
+  return hasNumericDose || hasPosologyPattern || (hasDirectiveVerb && hasDoseLexicon) || hasAntibioticPrescription;
+};
+
+const enforceReplyCompliance = (
+  reply: { greeting?: string; objective?: string; safety?: string; cta?: string },
+  mode: BotMode,
+  risk: RiskLevel,
+) => {
+  const safeReply = { ...reply };
+  const blockedUnsafeClinical = detectUnsafeClinicalInstruction(safeReply);
+
+  if (blockedUnsafeClinical) {
+    safeReply.objective = "Nao posso indicar dose personalizada nem prescrever antibioticos.";
+    safeReply.safety = "Uma farmacia parceira ou medico deve validar o seu caso clinico.";
+    safeReply.cta = "Quer que eu encaminhe para suporte farmaceutico?";
+  }
+
+  if ((mode === "SENSITIVE" || risk === "HIGH" || risk === "CRITICAL") && !String(safeReply.safety || "").trim()) {
+    safeReply.safety = "Nao posso indicar dose nem substituir avaliacao medica.";
+  }
+
+  if (!String(safeReply.greeting || "").trim()) safeReply.greeting = "Ola.";
+  if (!String(safeReply.objective || "").trim()) safeReply.objective = "Posso ajudar com o fluxo correto dentro da FarmoLink.";
+  if (!String(safeReply.cta || "").trim()) safeReply.cta = "Quer que eu continue por este caminho?";
+
+  return {
+    reply: {
+      greeting: String(safeReply.greeting || "Ola."),
+      objective: String(safeReply.objective || "Posso ajudar com o fluxo correto dentro da FarmoLink."),
+      safety: String(safeReply.safety || ""),
+      cta: String(safeReply.cta || "Quer que eu continue por este caminho?"),
+    },
+    blockedUnsafeClinical,
+  };
+};
+
 const fallbackActionsFromMessage = (message: string, productsContext: any[]) => {
   const msg = normalize(message);
   const actions: any[] = [];
@@ -313,10 +573,13 @@ const sanitizeActions = (rawActions: any[]) =>
     .map((item) => {
       const type = mapActionType(item?.type || "");
       if (!type) return null;
-      const payload: Record<string, unknown> = {};
-      if (item?.productId) payload.productId = item.productId;
-      if (item?.productName) payload.productName = item.productName;
-      if (item?.pharmacyId) payload.pharmacyId = item.pharmacyId;
+      const payload: Record<string, unknown> =
+        item?.payload && typeof item.payload === "object" && !Array.isArray(item.payload)
+          ? { ...item.payload }
+          : {};
+      if (item?.productId && payload.productId === undefined) payload.productId = item.productId;
+      if (item?.productName && payload.productName === undefined) payload.productName = item.productName;
+      if (item?.pharmacyId && payload.pharmacyId === undefined) payload.pharmacyId = item.pharmacyId;
       return { type, payload };
     })
     .filter((x: any) => !!x);
@@ -332,6 +595,7 @@ const getOrCreateConversation = async (
   userId: string,
   conversationId?: string,
   pharmacyId?: string,
+  forceNewConversation = false,
 ): Promise<{ conversation: ConversationRecord; persisted: boolean }> => {
   const fallbackConversation: ConversationRecord = {
     id: crypto.randomUUID(),
@@ -346,7 +610,7 @@ const getOrCreateConversation = async (
   };
 
   try {
-    if (conversationId) {
+    if (conversationId && !forceNewConversation) {
       const { data } = await admin
         .from("conversations")
         .select("*")
@@ -356,16 +620,18 @@ const getOrCreateConversation = async (
       if (data) return { conversation: data, persisted: true };
     }
 
-    const { data: openConversation } = await admin
-      .from("conversations")
-      .select("*")
-      .eq("user_id", userId)
-      .neq("status", "resolved")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    if (!forceNewConversation) {
+      const { data: openConversation } = await admin
+        .from("conversations")
+        .select("*")
+        .eq("user_id", userId)
+        .neq("status", "resolved")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (openConversation) return { conversation: openConversation, persisted: true };
+      if (openConversation) return { conversation: openConversation, persisted: true };
+    }
 
     const { data: created } = await admin
       .from("conversations")
@@ -539,12 +805,17 @@ const generateBotReply = async (
     `Modo operacional: ${mode}`,
     `Risco: ${risk}`,
     `Gatilhos detectados: ${triggers.join(", ") || "nenhum"}`,
-    `Produtos de contexto: ${JSON.stringify((productsContext || []).slice(0, 10))}`,
+    `Produtos de contexto: ${JSON.stringify((productsContext || []).slice(0, 20))}`,
     "Responda em portugues de Angola, objetivo e institucional.",
     "Nunca prescreva antibioticos.",
     "Nunca sugira dose personalizada.",
     "Nao substitua medico.",
     "Se clinico sensivel, inclua alerta de seguranca.",
+    "Nao invente disponibilidade, preco ou stock.",
+    "So cite produto quando ele existir em Produtos de contexto.",
+    "Quando citar produto/preco, sempre informe a farmacia de referencia.",
+    "Nao liste produtos/precos sem pedido explicito do utente.",
+    "Nao solicite nome/telefone para agendamento no chat.",
     "Actions permitidas: OPEN_UPLOAD_RX, OPEN_PRESCRIPTIONS, OPEN_PHARMACIES_NEARBY, OPEN_CART, ADD_TO_CART, OPEN_SUPPORT.",
   ].join("\n");
 
@@ -556,7 +827,7 @@ const generateBotReply = async (
       responseMimeType: "application/json",
       responseSchema: schema,
       systemInstruction:
-        "Voce e o FarmoBot da FarmoLink. Sempre entregue saudacao neutra, resposta objetiva, aviso de seguranca quando aplicavel e CTA unico. Nao use girias.",
+        "Voce e o FarmoBot da FarmoLink. Sempre entregue saudacao neutra, resposta objetiva, aviso de seguranca quando aplicavel e CTA unico. Nao use girias. Nunca invente dados de catalogo.",
     },
   });
 
@@ -605,17 +876,28 @@ serve(async (req) => {
         });
       }
 
+      const forceNewConversation = payload?.forceNewConversation === true;
       const { conversation, persisted } = await getOrCreateConversation(
         admin,
         user.id,
         payload?.conversationId,
         payload?.pharmacyId,
+        forceNewConversation,
       );
+      const contextPharmacyId = conversation.pharmacy_id || payload?.pharmacyId || null;
 
       const triggers = detectTriggers(userMessage);
       const mode = pickMode(userMessage, triggers);
       const risk = computeRisk(triggers, userMessage, conversation.frustration_score || 0, conversation.unresolved_turns || 0);
-      const decision = decideEscalation(risk, triggers, conversation.frustration_score || 0, conversation.unresolved_turns || 0);
+      let decision = decideEscalation(risk, triggers, conversation.frustration_score || 0, conversation.unresolved_turns || 0);
+      if (decision.target === "PHARMACY" && !contextPharmacyId) {
+        decision = {
+          target: "ADMIN",
+          level: 3,
+          reasonCode: "PHARMACY_CONTEXT_MISSING",
+          reasonText: "Sem farmacia definida para escalar no nivel 2",
+        };
+      }
 
       const start = Date.now();
       await insertMessage(admin, persisted, {
@@ -638,25 +920,35 @@ serve(async (req) => {
       let actions: any[] = [];
 
       if (decision.target === "BOT") {
-        try {
-          const modelResult = await generateBotReply(
-            ai,
-            userMessage,
-            mode,
-            risk,
-            triggers.all,
-            history || [],
-            productsContext || [],
-          );
-          replyBlocks = {
-            greeting: "Ola.",
-            objective: String(modelResult.reply?.objective || "").trim() || replyBlocks.objective,
-            safety: String(modelResult.reply?.safety || "").trim(),
-            cta: String(modelResult.reply?.cta || "").trim() || "Posso continuar a ajudar por aqui.",
-          };
-          actions = modelResult.actions;
-        } catch (e) {
-          console.error("Structured bot generation fallback:", (e as any)?.message || e);
+        if (hasSchedulingIntent(userMessage)) {
+          const flow = buildSchedulingReply();
+          replyBlocks = flow.reply;
+          actions = flow.actions;
+        } else if (hasInventoryIntent(userMessage)) {
+          const flow = buildInventoryReply(userMessage, productsContext || []);
+          replyBlocks = flow.reply;
+          actions = flow.actions;
+        } else {
+          try {
+            const modelResult = await generateBotReply(
+              ai,
+              userMessage,
+              mode,
+              risk,
+              triggers.all,
+              history || [],
+              productsContext || [],
+            );
+            replyBlocks = {
+              greeting: "Ola.",
+              objective: String(modelResult.reply?.objective || "").trim() || replyBlocks.objective,
+              safety: String(modelResult.reply?.safety || "").trim(),
+              cta: String(modelResult.reply?.cta || "").trim() || "Posso continuar a ajudar por aqui.",
+            };
+            actions = modelResult.actions;
+          } catch (e) {
+            console.error("Structured bot generation fallback:", (e as any)?.message || e);
+          }
         }
       } else {
         replyBlocks = buildEscalationReply(decision.target, risk);
@@ -667,8 +959,11 @@ serve(async (req) => {
         ];
       }
 
-      if ((mode === "SENSITIVE" || risk === "HIGH" || risk === "CRITICAL") && !String(replyBlocks.safety || "").trim()) {
-        replyBlocks.safety = "Nao posso indicar dose nem substituir avaliacao medica.";
+      const compliance = enforceReplyCompliance(replyBlocks, mode, risk);
+      replyBlocks = compliance.reply;
+      if (compliance.blockedUnsafeClinical) {
+        actions = (actions || []).filter((a: any) => String(a?.type || "").toUpperCase() !== "ADD_TO_CART");
+        actions.push({ type: "OPEN_SUPPORT", payload: {} });
       }
 
       const fallbackActions = fallbackActionsFromMessage(userMessage, productsContext || []);
@@ -689,12 +984,12 @@ serve(async (req) => {
       });
 
       const resolvedIntent = hasResolvedIntent(userMessage);
-      const nextStatus: ConversationStatus = resolvedIntent
-        ? "resolved"
+      const nextStatus: ConversationStatus = decision.target === "ADMIN"
+        ? "escalated_admin"
         : decision.target === "PHARMACY"
         ? "escalated_pharmacy"
-        : decision.target === "ADMIN"
-        ? "escalated_admin"
+        : resolvedIntent
+        ? "resolved"
         : "bot_active";
       const nextEscalationLevel = decision.target === "BOT" ? 1 : decision.level;
       const nextFrustration = triggers.frustration.length > 0
@@ -707,6 +1002,7 @@ serve(async (req) => {
           .from("conversations")
           .update({
             status: nextStatus,
+            pharmacy_id: contextPharmacyId,
             current_mode: mode,
             risk_level: risk,
             escalation_level: nextEscalationLevel,
@@ -723,7 +1019,7 @@ serve(async (req) => {
       if (decision.target !== "BOT") {
         escalationId = await createEscalation(admin, persisted, {
           conversation_id: conversation.id,
-          from_level: 1,
+          from_level: Math.max(1, Math.min(3, Number(conversation.escalation_level || 1))),
           to_level: decision.level,
           target: decision.target,
           reason_code: decision.reasonCode,
@@ -740,7 +1036,7 @@ serve(async (req) => {
         });
 
         await mirrorEscalationToSupport(admin, user, decision, risk, userMessage);
-        await notifyEscalation(admin, user.id, conversation.pharmacy_id, decision, risk);
+        await notifyEscalation(admin, user.id, contextPharmacyId, decision, risk);
       }
 
       return new Response(

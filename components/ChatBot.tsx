@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, X, Send, Bot, Minus, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { MessageCircle, X, Send, Bot, Minus, RefreshCw, Plus, Trash2 } from 'lucide-react';
 import {
   BotActionEvent,
   BotConversationStatus,
@@ -8,6 +8,7 @@ import {
   getChatSession,
   checkAiHealth,
   fetchChatHistory,
+  clearChatHistory,
 } from '../services/geminiService';
 import { playSound } from '../services/soundService';
 import { supabase } from '../services/supabaseClient';
@@ -17,10 +18,17 @@ interface Message {
   text: string;
 }
 
+interface QueuedMessage {
+  text: string;
+  historySnapshot: Message[];
+}
+
 interface ChatBotProps {
   onAction?: (action: BotActionEvent) => void;
   preferredPharmacyId?: string | null;
 }
+
+const DEFAULT_GREETING_MESSAGE: Message = { role: 'model', text: 'Ola. Sou o FarmoBot. Como posso ajudar?' };
 
 const modeLabel = (mode?: BotMode) => {
   if (mode === 'COMMERCIAL') return 'Comercial';
@@ -50,15 +58,23 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [isClearingHistory, setIsClearingHistory] = useState(false);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [user, setUser] = useState<any>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
+  const [forceNewConversation, setForceNewConversation] = useState(false);
   const [botStatus, setBotStatus] = useState<BotConversationStatus | undefined>(undefined);
   const [botMode, setBotMode] = useState<BotMode | undefined>(undefined);
   const [riskLevel, setRiskLevel] = useState<BotRiskLevel | undefined>(undefined);
   const chatSessionRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<Message[]>([]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const init = async () => {
@@ -69,7 +85,7 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
         if (history.length > 0) {
           setMessages(history.map((h: any) => ({ role: h.role, text: h.content })));
         } else {
-          setMessages([{ role: 'model', text: 'Ola. Sou o FarmoBot. Como posso ajudar?' }]);
+          setMessages([DEFAULT_GREETING_MESSAGE]);
         }
       }
     };
@@ -100,8 +116,39 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
     actions.forEach((action) => onAction(action));
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || loading || !user) return;
+  const handleNewChat = () => {
+    setConversationId(undefined);
+    setForceNewConversation(true);
+    setBotStatus(undefined);
+    setBotMode(undefined);
+    setRiskLevel(undefined);
+    setQueue([]);
+    setIsProcessing(false);
+    setMessages([DEFAULT_GREETING_MESSAGE]);
+  };
+
+  const handleClearHistory = async () => {
+    if (!user || isClearingHistory) return;
+    if (!window.confirm('Deseja apagar todo o historico do chat?')) return;
+
+    setIsClearingHistory(true);
+    const ok = await clearChatHistory(user.id);
+    setIsClearingHistory(false);
+
+    if (ok) {
+      handleNewChat();
+      playSound('success');
+      return;
+    }
+
+    setMessages((prev) => [
+      ...prev,
+      { role: 'model', text: 'Nao consegui apagar o historico agora. Tente novamente.' },
+    ]);
+  };
+
+  const enqueueMessage = () => {
+    if (!input.trim() || !user || isClearingHistory) return;
     if (!navigator.onLine) {
       setMessages((prev) => [
         ...prev,
@@ -111,11 +158,19 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
     }
 
     const userMsg = input.trim();
+    const historySnapshot: Message[] = [...messagesRef.current.slice(-7), { role: 'user', text: userMsg }];
     setInput('');
     setMessages((prev) => [...prev, { role: 'user', text: userMsg }]);
-    setLoading(true);
+    setQueue((prev) => [...prev, { text: userMsg, historySnapshot }]);
     playSound('click');
+  };
 
+  const processNextMessage = useCallback(async () => {
+    if (isProcessing || queue.length === 0 || !user || isClearingHistory) return;
+
+    const nextItem = queue[0];
+    const userMsg = nextItem.text;
+    setIsProcessing(true);
     try {
       if (!chatSessionRef.current) chatSessionRef.current = getChatSession();
       const result = await chatSessionRef.current.sendMessage({
@@ -124,11 +179,13 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
         userId: user.id,
         conversationId,
         pharmacyId: preferredPharmacyId || undefined,
-        history: messages.slice(-8),
+        forceNewConversation,
+        history: nextItem.historySnapshot,
       });
 
       setMessages((prev) => [...prev, { role: 'model', text: result.text }]);
       if (result.conversationId) setConversationId(result.conversationId);
+      setForceNewConversation(false);
       if (result.conversationStatus) setBotStatus(result.conversationStatus);
       if (result.mode) setBotMode(result.mode);
       if (result.riskLevel) setRiskLevel(result.riskLevel);
@@ -136,9 +193,22 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
     } catch (error) {
       setMessages((prev) => [...prev, { role: 'model', text: 'Tive um erro de rede. Pode repetir?' }]);
     } finally {
-      setLoading(false);
+      setQueue((prev) => prev.slice(1));
+      setIsProcessing(false);
     }
-  };
+  }, [
+    isProcessing,
+    queue,
+    user,
+    isClearingHistory,
+    conversationId,
+    preferredPharmacyId,
+    forceNewConversation,
+  ]);
+
+  useEffect(() => {
+    processNextMessage();
+  }, [processNextMessage]);
 
   return (
     <div className="fixed bottom-6 right-6 z-[9999] flex flex-col items-end">
@@ -158,11 +228,24 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
                   {isConnected === null ? 'Conectando...' : isConnected ? 'Online' : 'Offline'}
                 </p>
                 <p className="text-[9px] text-emerald-50/90 mt-1 font-semibold">
-                  {`Modo: ${modeLabel(botMode)} | Risco: ${riskLabel(riskLevel)} | Estado: ${statusLabel(botStatus)}`}
+                  {botMode || riskLevel || botStatus
+                    ? `Modo: ${modeLabel(botMode)} | Risco: ${riskLabel(riskLevel)} | Estado: ${statusLabel(botStatus)}`
+                    : 'Pronto para ajudar com compra, receita e navegacao.'}
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button onClick={handleNewChat} className="hover:bg-white/10 p-2 rounded-full" title="Novo chat">
+                <Plus size={16} />
+              </button>
+              <button
+                onClick={handleClearHistory}
+                disabled={isClearingHistory}
+                className="hover:bg-white/10 p-2 rounded-full disabled:opacity-50"
+                title="Apagar historico"
+              >
+                <Trash2 size={16} />
+              </button>
               <button onClick={verifyConnection} className="hover:bg-white/10 p-2 rounded-full">
                 <RefreshCw size={16} />
               </button>
@@ -186,6 +269,14 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
                 </div>
               </div>
             ))}
+            {isProcessing && (
+              <div className="flex justify-start animate-fade-in">
+                <div className="max-w-[86%] p-4 rounded-3xl text-sm bg-white text-gray-700 border-l-4 border-emerald-500 rounded-tl-none shadow-sm flex items-center gap-2">
+                  <RefreshCw size={14} className="animate-spin text-emerald-600" />
+                  Processando sua mensagem...
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="p-4 bg-white border-t flex gap-2 shrink-0 items-center">
@@ -194,16 +285,23 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
               placeholder="Mensagem..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              onKeyDown={(e) => e.key === 'Enter' && enqueueMessage()}
             />
             <button
-              onClick={handleSend}
-              disabled={loading || !input.trim()}
+              onClick={enqueueMessage}
+              disabled={isClearingHistory || !input.trim()}
               className="w-14 h-14 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-700 transition-all flex items-center justify-center shadow-lg active:scale-90"
             >
               <Send size={22} />
             </button>
           </div>
+          {(isProcessing || queue.length > 0) && (
+            <div className="px-4 pb-3 text-[10px] text-gray-500 font-semibold">
+              {isProcessing
+                ? `Processando. Mensagens na fila: ${Math.max(0, queue.length - 1)}`
+                : `Mensagens na fila: ${queue.length}`}
+            </div>
+          )}
         </div>
       )}
 
