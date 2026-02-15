@@ -4,7 +4,7 @@ import { User, UserRole, Product, Pharmacy, Order, OrderStatus, PrescriptionRequ
 import { MainLayout } from './components/Layout';
 import { AuthView, UpdatePasswordView } from './components/Auth';
 import { LandingPage } from './components/LandingPage';
-import { LoadingOverlay, Button } from './components/UI';
+import { LoadingOverlay } from './components/UI';
 import { ChatBot } from './components/ChatBot';
 import { getCurrentUser, signOutUser } from './services/authService';
 import { fetchPharmacies } from './services/pharmacyService';
@@ -13,7 +13,7 @@ import { fetchOrders, fetchPrescriptionRequests, createOrder } from './services/
 import { getCacheForUser, getLastSyncForUser, setCacheForUser } from './services/dataService';
 import { playSound } from './services/soundService';
 import { getCurrentPosition, calculateDistance } from './services/locationService';
-import { WifiOff, RefreshCw, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info } from 'lucide-react';
+import { Wifi, WifiOff, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
 import { SUPABASE_URL } from './services/supabaseClient';
 
@@ -39,36 +39,6 @@ import { AdminSettingsView, AdminBackupView } from './views/AdminSystem';
 import { AdminSupportView } from './views/AdminSupport';
 import { AboutView, FAQView, TermsOfUseView, PrivacyPolicyView } from './views/PublicInfoViews';
 
-const OfflineView: React.FC<{
-    lastSyncAt: number | null;
-    hasCachedData: boolean;
-    onRetry: () => void;
-    onOpenCached: () => void;
-}> = ({ lastSyncAt, hasCachedData, onRetry, onOpenCached }) => (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-3xl border border-gray-100 shadow-xl p-8 text-center space-y-5">
-            <div className="mx-auto w-16 h-16 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
-                <WifiOff size={30} />
-            </div>
-            <h2 className="text-2xl font-black text-gray-800">Sem conexao com a internet</h2>
-            <p className="text-sm text-gray-500">
-                Alguns recursos ficam indisponiveis. Pode abrir os dados ja guardados neste dispositivo.
-            </p>
-            <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">
-                Ultima sincronizacao: {lastSyncAt ? new Date(lastSyncAt).toLocaleString('pt-AO') : 'Sem dados locais'}
-            </p>
-            <div className="flex gap-3">
-                <Button onClick={onRetry} variant="outline" className="flex-1">
-                    <RefreshCw size={16} className="mr-2" /> Tentar Novamente
-                </Button>
-                <Button onClick={onOpenCached} className="flex-1" disabled={!hasCachedData}>
-                    Abrir Dados Guardados
-                </Button>
-            </div>
-        </div>
-    </div>
-);
-
 export const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
     const [page, setPage] = useState('home');
@@ -78,10 +48,11 @@ export const App: React.FC = () => {
     const [showExitHint, setShowExitHint] = useState(false);
     const [networkError, setNetworkError] = useState<string | null>(null);
     const [isOffline, setIsOffline] = useState<boolean>(isOfflineNow());
-    const [allowOfflineCachedView, setAllowOfflineCachedView] = useState(false);
     const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
     const [syncNotice, setSyncNotice] = useState<string | null>(null);
+    const [connectionToast, setConnectionToast] = useState<{ type: 'offline' | 'online'; message: string } | null>(null);
     const isSyncingQueueRef = useRef(false);
+    const connectionToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
     const [products, setProducts] = useState<Product[]>([]);
     const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
@@ -173,18 +144,43 @@ export const App: React.FC = () => {
         }
     }, []);
 
+    const showConnectionToast = useCallback((type: 'offline' | 'online', message: string) => {
+        setConnectionToast({ type, message });
+        if (connectionToastTimeoutRef.current) {
+            clearTimeout(connectionToastTimeoutRef.current);
+        }
+        connectionToastTimeoutRef.current = setTimeout(() => {
+            setConnectionToast(null);
+        }, 4500);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (connectionToastTimeoutRef.current) {
+                clearTimeout(connectionToastTimeoutRef.current);
+            }
+        };
+    }, []);
+
     const refreshConnectivity = useCallback(async () => {
         const reachable = await probeInternet();
-        setIsOffline(!reachable);
+        const nextOffline = !reachable;
+
+        setIsOffline(prev => {
+            if (prev !== nextOffline) {
+                showConnectionToast(
+                    nextOffline ? 'offline' : 'online',
+                    nextOffline ? 'Voce esta offline.' : 'Voce esta online novamente.'
+                );
+            }
+            return nextOffline;
+        });
 
         if (reachable) {
             setNetworkError(null);
-            setAllowOfflineCachedView(false);
             await syncOfflineQueue();
-        } else {
-            setNetworkError('Sem conexão com a internet. Modo offline ativo.');
         }
-    }, [probeInternet, syncOfflineQueue]);
+    }, [probeInternet, showConnectionToast, syncOfflineQueue]);
 
     // --- Detector de erros de rede + sincronizacao offline ---
     useEffect(() => {
@@ -193,8 +189,12 @@ export const App: React.FC = () => {
         };
 
         const handleOffline = () => {
-            setIsOffline(true);
-            setNetworkError('Sem conexão com a internet. Modo offline ativo.');
+            setIsOffline(prev => {
+                if (!prev) {
+                    showConnectionToast('offline', 'Voce esta offline.');
+                }
+                return true;
+            });
         };
 
         const handleVisibility = () => {
@@ -641,8 +641,6 @@ export const App: React.FC = () => {
     };
 
     const renderContent = () => {
-        const hasCachedData = !!(user && getCacheForUser(user.id));
-
         if (page === 'reset-password' || page === 'update-password') {
             return (
                 <UpdatePasswordView
@@ -651,26 +649,6 @@ export const App: React.FC = () => {
                         setPage('login');
                         window.history.replaceState({}, document.title, '/');
                     }}
-                />
-            );
-        }
-
-        if (isOffline && !allowOfflineCachedView) {
-            return (
-                <OfflineView
-                    lastSyncAt={lastSyncAt}
-                    hasCachedData={hasCachedData}
-                    onRetry={() => {
-                        if (navigator.onLine) {
-                            setIsOffline(false);
-                            setAllowOfflineCachedView(false);
-                            setNetworkError(null);
-                            syncOfflineQueue();
-                        } else {
-                            setNetworkError('Ainda sem conexao. Verifique a internet e tente novamente.');
-                        }
-                    }}
-                    onOpenCached={() => setAllowOfflineCachedView(true)}
                 />
             );
         }
@@ -768,9 +746,16 @@ export const App: React.FC = () => {
                 </div>
             )}
 
-            {isOffline && allowOfflineCachedView && (
-                <div className="fixed top-0 left-0 right-0 z-[9998] bg-amber-600 text-white px-6 py-2 text-xs font-black uppercase tracking-widest text-center">
-                    Modo offline: dados podem estar desatualizados. Ultima sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString('pt-AO') : 'sem dados'}
+            {connectionToast && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10001] pointer-events-none">
+                    <div className={`backdrop-blur-md px-5 py-2 rounded-full border shadow-2xl text-xs font-black uppercase tracking-wide flex items-center gap-2 ${
+                        connectionToast.type === 'offline'
+                            ? 'bg-amber-900/90 text-amber-50 border-amber-400/40'
+                            : 'bg-emerald-900/90 text-emerald-50 border-emerald-400/40'
+                    }`}>
+                        {connectionToast.type === 'offline' ? <WifiOff size={14} className="shrink-0" /> : <Wifi size={14} className="shrink-0" />}
+                        <span>{connectionToast.message}</span>
+                    </div>
                 </div>
             )}
             

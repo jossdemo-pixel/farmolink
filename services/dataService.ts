@@ -344,22 +344,15 @@ export const sendSystemNotification = async (target: 'ALL' | 'CUSTOMER' | 'PHARM
 
 // --- CACHE PARA RELATÃ“RIOS FINANCEIROS ---
 const FINANCIAL_CACHE_KEY = 'farmolink_financial_report';
-const FINANCIAL_CACHE_DURATION = 1000 * 60 * 5; // 5 minutos
 export const DEFAULT_FINANCIAL_SETTLEMENT_CYCLE: SettlementCycle = 'MONTHLY';
 
 export const getCachedFinancialReport = (): any[] | null => {
-    try {
-        const cached = localStorage.getItem(FINANCIAL_CACHE_KEY);
-        if (!cached) return null;
-        const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.timestamp > FINANCIAL_CACHE_DURATION) return null;
-        return parsed.data;
-    } catch { return null; }
+    return null;
 };
 
-export const setCachedFinancialReport = (data: any[]) => {
+export const setCachedFinancialReport = (_data: any[]) => {
     try {
-        localStorage.setItem(FINANCIAL_CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data }));
+        localStorage.removeItem(FINANCIAL_CACHE_KEY);
     } catch (e) { console.error("Erro cache financeiro", e); }
 };
 
@@ -406,208 +399,28 @@ export const saveFinancialSettlementCycle = async (cycle: SettlementCycle): Prom
     }
 };
 
-const getPeriodDateRange = (periodKey: string, cycle: SettlementCycle): { startIso: string, endIso: string } | null => {
-    if (cycle === 'MONTHLY') {
-        const [m, y] = periodKey.split('/');
-        const monthNum = parseInt(m, 10);
-        const yearNum = parseInt(y, 10);
-        if (Number.isNaN(monthNum) || Number.isNaN(yearNum) || monthNum < 1 || monthNum > 12) return null;
-
-        const startDate = new Date(Date.UTC(yearNum, monthNum - 1, 1, 0, 0, 0));
-        const endDate = new Date(Date.UTC(yearNum, monthNum, 1, 0, 0, 0));
-        return { startIso: startDate.toISOString(), endIso: endDate.toISOString() };
-    }
-
-    const [yearPart, weekPart] = periodKey.split('-W');
-    const year = parseInt(yearPart, 10);
-    const week = parseInt(weekPart, 10);
-    if (Number.isNaN(year) || Number.isNaN(week) || week < 1 || week > 53) return null;
-
-    const jan4 = new Date(Date.UTC(year, 0, 4));
-    const jan4WeekDay = jan4.getUTCDay() || 7;
-    const week1Monday = new Date(jan4);
-    week1Monday.setUTCDate(jan4.getUTCDate() - jan4WeekDay + 1);
-
-    const startDate = new Date(week1Monday);
-    startDate.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
-
-    const endDate = new Date(startDate);
-    endDate.setUTCDate(startDate.getUTCDate() + 7);
-
-    return { startIso: startDate.toISOString(), endIso: endDate.toISOString() };
-};
-
-const normalizeOrderStatus = (status?: string) =>
-    (status || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim()
-        .toUpperCase();
-
-const isCompletedOrderStatus = (status?: string) => {
-    const normalized = normalizeOrderStatus(status);
-    return normalized === 'CONCLUIDO' || normalized === 'COMPLETED';
-};
-
-const calculateOutstanding = (order: any) => {
-    const commission = Number(order.commission_amount || 0);
-    const paidByAmount = Number(order.commission_paid_amount || 0);
-    const paidFromLegacyStatus = order.commission_status === 'PAID' && paidByAmount <= 0 ? commission : 0;
-    const paid = Math.min(commission, Math.max(0, paidByAmount + paidFromLegacyStatus));
-    return {
-        commission,
-        paid,
-        outstanding: Math.max(0, commission - paid)
-    };
-};
-
-const fetchOrderRowsForPeriod = async (pharmacyId: string, periodKey: string, cycle: SettlementCycle) => {
-    const range = getPeriodDateRange(periodKey, cycle);
-    if (!range) return { data: null as any[] | null, error: { message: 'Periodo invalido.', code: 'INVALID_PERIOD' } };
-
-    const { data, error } = await supabase
-        .from('orders')
-        .select('id, status, commission_amount, commission_status, commission_paid_amount, created_at')
-        .eq('pharmacy_id', pharmacyId)
-        .gte('created_at', range.startIso)
-        .lt('created_at', range.endIso)
-        .order('created_at', { ascending: true });
-
-    return { data: data || [], error };
-};
-
-const applyCommissionPaymentByPeriodByAdminLegacy = async (
-    pharmacyId: string,
-    periodKey: string,
-    cycle: SettlementCycle,
-    paymentAmount?: number
-): Promise<{ success: boolean, updatedCount: number, appliedAmount: number, remainingAmount: number, error?: string }> => {
-    try {
-        const { data, error } = await fetchOrderRowsForPeriod(pharmacyId, periodKey, cycle);
-        if (error) {
-            if ((error as any)?.code === '42703') {
-                return {
-                    success: false,
-                    updatedCount: 0,
-                    appliedAmount: 0,
-                    remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0,
-                    error: 'Coluna financeira ausente (commission_status/commission_paid_amount). Execute o database_setup atualizado no Supabase.'
-                };
-            }
-            return {
-                success: false,
-                updatedCount: 0,
-                appliedAmount: 0,
-                remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0,
-                error: (error as any)?.message || 'Falha ao carregar ordens do periodo.'
-            };
-        }
-
-        const completedOrders = (data || []).filter((o: any) => isCompletedOrderStatus(o.status));
-        const pendingOrders = completedOrders.filter((o: any) => calculateOutstanding(o).outstanding > 0);
-        if (!pendingOrders.length) {
-            return { success: true, updatedCount: 0, appliedAmount: 0, remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0 };
-        }
-
-        let remaining = paymentAmount && paymentAmount > 0 ? paymentAmount : Infinity;
-        let appliedAmount = 0;
-        let updatedCount = 0;
-
-        for (const order of pendingOrders) {
-            const { commission, paid, outstanding } = calculateOutstanding(order);
-            if (outstanding <= 0 || remaining <= 0) continue;
-
-            const applied = Math.min(outstanding, remaining);
-            const nextPaid = paid + applied;
-            const nextStatus = nextPaid >= commission ? 'PAID' : 'PARTIAL';
-
-            const { error: updateError } = await supabase
-                .from('orders')
-                .update({
-                    commission_paid_amount: nextPaid,
-                    commission_status: nextStatus
-                })
-                .eq('id', order.id);
-
-            if (updateError) {
-                if ((updateError as any)?.code === '42703') {
-                    return {
-                        success: false,
-                        updatedCount,
-                        appliedAmount,
-                        remainingAmount: Number.isFinite(remaining) ? remaining : 0,
-                        error: 'Coluna financeira ausente (commission_status/commission_paid_amount). Execute o database_setup atualizado no Supabase.'
-                    };
-                }
-                return {
-                    success: false,
-                    updatedCount,
-                    appliedAmount,
-                    remainingAmount: Number.isFinite(remaining) ? remaining : 0,
-                    error: updateError.message
-                };
-            }
-
-            updatedCount += 1;
-            appliedAmount += applied;
-            if (Number.isFinite(remaining)) remaining -= applied;
-        }
-
-        localStorage.removeItem(FINANCIAL_CACHE_KEY);
-        return {
-            success: true,
-            updatedCount,
-            appliedAmount,
-            remainingAmount: Number.isFinite(remaining) ? Math.max(0, remaining) : 0
-        };
-    } catch (e) {
-        console.error("Erro applyCommissionPaymentByPeriodByAdmin:", e);
-        return { success: false, updatedCount: 0, appliedAmount: 0, remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0, error: 'Falha inesperada ao processar pagamento.' };
-    }
-};
-
 export const resetCommissionDebtByAdmin = async (pharmacyId?: string): Promise<{ success: boolean, updatedCount: number, error?: string }> => {
     try {
         const { data: rpcData, error: rpcError } = await supabase.rpc('reset_commission_debt_admin', {
             target_pharmacy_id: pharmacyId || null
         } as any);
 
-        if (!rpcError) {
-            localStorage.removeItem(FINANCIAL_CACHE_KEY);
-            return { success: true, updatedCount: Number(rpcData || 0) };
-        }
-
-        const rpcCode = (rpcError as any)?.code;
-        const rpcMsg = (rpcError as any)?.message || '';
-        const shouldFallback =
-            rpcCode === '42883' ||
-            rpcCode === 'PGRST202' ||
-            rpcMsg.includes('reset_commission_debt_admin');
-
-        if (!shouldFallback) {
+        if (rpcError) {
+            const rpcCode = (rpcError as any)?.code;
+            const rpcMsg = (rpcError as any)?.message || '';
+            const missingFn = rpcCode === '42883' || rpcCode === 'PGRST202' || rpcMsg.includes('reset_commission_debt_admin');
+            if (missingFn) {
+                return {
+                    success: false,
+                    updatedCount: 0,
+                    error: 'Funcao reset_commission_debt_admin ausente no banco. Execute o database_setup.txt atualizado.'
+                };
+            }
             return { success: false, updatedCount: 0, error: rpcMsg || 'Falha ao executar reset financeiro.' };
         }
 
-        let query = supabase
-            .from('orders')
-            .update({
-                commission_status: 'PENDING',
-                commission_paid_amount: 0
-            })
-            .in('status', ['Concluído', 'Concluido', 'COMPLETED']);
-
-        if (pharmacyId) query = query.eq('pharmacy_id', pharmacyId);
-
-        const { data, error } = await query.select('id');
-        if (error) {
-            if ((error as any)?.code === '42703') {
-                return { success: false, updatedCount: 0, error: 'Coluna financeira ausente. Execute o database_setup atualizado no Supabase.' };
-            }
-            return { success: false, updatedCount: 0, error: error.message };
-        }
-
         localStorage.removeItem(FINANCIAL_CACHE_KEY);
-        return { success: true, updatedCount: data?.length || 0 };
+        return { success: true, updatedCount: Number(rpcData || 0) };
     } catch (e) {
         console.error("Erro resetCommissionDebtByAdmin:", e);
         return { success: false, updatedCount: 0, error: 'Falha inesperada ao resetar dividas.' };
@@ -1058,42 +871,52 @@ export const applyCommissionPaymentByPeriodByAdmin = async (
             p_period_key: periodKey,
             p_cycle: cycle,
             p_payment_amount: paymentAmount && paymentAmount > 0 ? paymentAmount : null,
-            p_note: 'Liquidação registada pelo painel admin'
+            p_note: 'Liquidacao registada pelo painel admin'
         };
 
         const { data, error } = await supabase.rpc('apply_commission_payment_by_period_admin', payload as any);
-        if (!error && Array.isArray(data) && data[0]) {
-            const row = data[0] as any;
-            localStorage.removeItem(FINANCIAL_CACHE_KEY);
+        if (error) {
+            const errCode = (error as any)?.code;
+            const errMsg = (error as any)?.message || '';
+            const missingFn =
+                errCode === '42883' ||
+                errCode === 'PGRST202' ||
+                errMsg.includes('apply_commission_payment_by_period_admin');
+            if (missingFn) {
+                return {
+                    success: false,
+                    updatedCount: 0,
+                    appliedAmount: 0,
+                    remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0,
+                    error: 'Funcao apply_commission_payment_by_period_admin ausente no banco. Execute o database_setup.txt atualizado.'
+                };
+            }
             return {
-                success: true,
-                updatedCount: Number(row.updated_count || 0),
-                appliedAmount: Number(row.applied_amount || 0),
-                remainingAmount: Number(row.remaining_amount || 0)
+                success: false,
+                updatedCount: 0,
+                appliedAmount: 0,
+                remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0,
+                error: errMsg || 'Falha ao executar liquidacao financeira.'
             };
         }
 
-        const errCode = (error as any)?.code;
-        const errMsg = (error as any)?.message || '';
-        const shouldFallback =
-            errCode === '42883' || // function undefined (postgres)
-            errCode === 'PGRST202' || // function not in schema cache
-            errMsg.includes('apply_commission_payment_by_period_admin');
-
-        if (shouldFallback) {
-            return applyCommissionPaymentByPeriodByAdminLegacy(pharmacyId, periodKey, cycle, paymentAmount);
-        }
-
+        const row = Array.isArray(data) ? data[0] : null;
+        localStorage.removeItem(FINANCIAL_CACHE_KEY);
+        return {
+            success: true,
+            updatedCount: Number((row as any)?.updated_count || 0),
+            appliedAmount: Number((row as any)?.applied_amount || 0),
+            remainingAmount: Number((row as any)?.remaining_amount || 0)
+        };
+    } catch (e) {
+        console.error("Erro applyCommissionPaymentByPeriodByAdmin RPC:", e);
         return {
             success: false,
             updatedCount: 0,
             appliedAmount: 0,
             remainingAmount: paymentAmount && paymentAmount > 0 ? paymentAmount : 0,
-            error: errMsg || 'Falha ao executar liquidação financeira.'
+            error: 'Falha inesperada ao executar liquidacao.'
         };
-    } catch (e) {
-        console.error("Erro applyCommissionPaymentByPeriodByAdmin RPC:", e);
-        return applyCommissionPaymentByPeriodByAdminLegacy(pharmacyId, periodKey, cycle, paymentAmount);
     }
 };
 
