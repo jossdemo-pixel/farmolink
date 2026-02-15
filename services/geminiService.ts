@@ -3,12 +3,14 @@ import { PrescriptionRequest } from '../types';
 
 /**
  * FarmoLink AI Service - Production Bridge
- * Supports structured FarmoBot responses with safe fallback to legacy chat.
+ * Structured FarmoBot flow only.
  */
 
 const TIMEOUT = 30000;
 const VISION_TIMEOUT = 45000;
-const CONTEXT_LIMIT = 40;
+const CONTEXT_LIMIT = 120;
+const CONTEXT_LIMIT_PREFERRED_PHARMACY = 60;
+const CONTEXT_LIMIT_GLOBAL = 120;
 
 const SEARCH_STOPWORDS = new Set([
   'a',
@@ -51,6 +53,7 @@ const SEARCH_STOPWORDS = new Set([
 
 const CATALOG_INTENT_REGEX = /\b(tem|disponivel|stock|preco|valor|custa|produto|medicamento|reservar|reserva|comprar|carrinho)\b/;
 const NON_CATALOG_INTENT_REGEX = /\b(agendar|agendamento|consulta|horario|suporte|reclamar|erro|problema|enviar receita|upload receita)\b/;
+const FORBIDDEN_BOT_TERMS = ['mambo'];
 
 const normalizeText = (value: string) =>
   String(value || '')
@@ -79,18 +82,72 @@ const extractSearchTerms = (message: string): string[] => {
   return Array.from(new Set(words)).slice(0, 4);
 };
 
-const buildProductsContext = async (message: string) => {
-  const terms = extractSearchTerms(message);
-  if (terms.length === 0) return [];
-  let products: any[] = [];
+const sanitizeBotText = (text: string): string => {
+  let output = String(text || '');
+  FORBIDDEN_BOT_TERMS.forEach((term) => {
+    const regex = new RegExp(`\\b${term}\\b`, 'gi');
+    output = output.replace(regex, 'cliente');
+  });
+  return output.replace(/\s{2,}/g, ' ').trim();
+};
 
+const deriveContextSeed = (message: string, history?: Array<{ role?: string; text?: string; content?: string }>) => {
+  if (extractSearchTerms(message).length > 0) return message;
+  const recentUserMessages = (history || [])
+    .filter((item) => String(item?.role || '').toLowerCase() === 'user')
+    .map((item) => String(item?.text || item?.content || '').trim())
+    .filter(Boolean)
+    .slice(-4)
+    .reverse();
+
+  const candidate = recentUserMessages.find((text) => extractSearchTerms(text).length > 0);
+  if (!candidate) return message;
+  return `${candidate} ${message}`.trim();
+};
+
+const fetchProductsByTerms = async (terms: string[], pharmacyId?: string, limit = CONTEXT_LIMIT_GLOBAL) => {
+  if (terms.length === 0) return [];
   const orFilter = terms.map((t) => `name.ilike.%${t}%`).join(',');
-  const { data, error } = await supabase
+  let query = supabase
     .from('products')
     .select('id, name, price, pharmacy_id, stock, requires_prescription')
     .or(orFilter)
-    .limit(CONTEXT_LIMIT);
-  if (!error && Array.isArray(data)) products = data;
+    .order('stock', { ascending: false })
+    .order('name', { ascending: true })
+    .limit(limit);
+
+  if (pharmacyId) query = query.eq('pharmacy_id', pharmacyId);
+
+  const { data, error } = await query;
+  if (error || !Array.isArray(data)) return [];
+  return data;
+};
+
+const dedupeProducts = (items: any[]) => {
+  const map = new Map<string, any>();
+  (items || []).forEach((item: any) => {
+    const id = String(item?.id || '');
+    if (!id || map.has(id)) return;
+    map.set(id, item);
+  });
+  return Array.from(map.values()).slice(0, CONTEXT_LIMIT);
+};
+
+const buildProductsContext = async (
+  message: string,
+  history?: Array<{ role?: string; text?: string; content?: string }>,
+  preferredPharmacyId?: string,
+) => {
+  const seed = deriveContextSeed(message, history);
+  const terms = extractSearchTerms(seed);
+  if (terms.length === 0) return [];
+
+  const [preferredProducts, globalProducts] = await Promise.all([
+    preferredPharmacyId ? fetchProductsByTerms(terms, preferredPharmacyId, CONTEXT_LIMIT_PREFERRED_PHARMACY) : Promise.resolve([]),
+    fetchProductsByTerms(terms, undefined, CONTEXT_LIMIT_GLOBAL),
+  ]);
+
+  const products = dedupeProducts([...preferredProducts, ...globalProducts]);
   if (products.length === 0) return [];
 
   const pharmacyIds = Array.from(
@@ -265,9 +322,9 @@ const composeReplyText = (reply?: Partial<FarmoBotReply>, fallbackText?: string)
     const blocks = [reply?.greeting, reply?.objective, reply?.safety, reply?.cta]
       .map((b) => String(b || '').trim())
       .filter(Boolean);
-    if (blocks.length > 0) return blocks.join(' ');
+    if (blocks.length > 0) return sanitizeBotText(blocks.join(' '));
   }
-  return fallbackText || 'Nao consegui gerar resposta agora. Tente novamente.';
+  return sanitizeBotText(fallbackText || 'Nao consegui gerar resposta agora. Tente novamente.');
 };
 
 export const checkAiHealth = async (): Promise<boolean> => {
@@ -299,29 +356,51 @@ export const checkAiHealth = async (): Promise<boolean> => {
 
 export const fetchChatHistory = async (userId: string) => {
   try {
-    const { data } = await supabase
-      .from('bot_conversations')
-      .select('role, content')
+    const { data: activeConversation, error: conversationError } = await supabase
+      .from('conversations')
+      .select('id')
       .eq('user_id', userId)
+      .neq('status', 'resolved')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (conversationError || !activeConversation?.id) return [];
+
+    const { data, error } = await supabase
+      .from('conversation_messages')
+      .select('conversation_id, role, content')
+      .eq('conversation_id', activeConversation.id)
       .order('created_at', { ascending: true });
-    return data || [];
+
+    if (error) return [];
+
+    return (data || []).map((row: any) => ({
+      conversationId: String(row?.conversation_id || activeConversation.id),
+      role: String(row?.role || '').toUpperCase() === 'USER' ? 'user' : 'model',
+      content: String(row?.content || ''),
+    }));
   } catch (e) {
     console.error('Erro ao carregar historico:', e);
     return [];
   }
 };
 
-export const saveChatMessage = async (userId: string, role: 'user' | 'model', content: string) => {
-  try {
-    await supabase.from('bot_conversations').insert([{ user_id: userId, role, content }]);
-  } catch (e) {
-    console.error('Erro ao salvar mensagem:', e);
-  }
-};
-
 export const clearChatHistory = async (userId: string): Promise<boolean> => {
   try {
-    const { error } = await supabase.from('bot_conversations').delete().eq('user_id', userId);
+    const { error } = await supabase
+      .from('conversations')
+      .update({
+        status: 'resolved',
+        unresolved_turns: 0,
+        frustration_score: 0,
+        escalation_level: 1,
+        resolved_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .neq('status', 'resolved');
+
     return !error;
   } catch (e) {
     console.error('Erro ao limpar historico:', e);
@@ -356,7 +435,9 @@ export const getChatSession = () => {
 
         const [sessionResult, productsContextResult] = await Promise.all([
           supabase.auth.getSession(),
-          shouldBuildProductsContext(message) ? buildProductsContext(message) : Promise.resolve([]),
+          shouldBuildProductsContext(message)
+            ? buildProductsContext(message, history, pharmacyId)
+            : Promise.resolve([]),
         ]);
         productsContext = productsContextResult;
 
@@ -382,27 +463,6 @@ export const getChatSession = () => {
 
         let { data, error } = await invokeGeminiWithRetry(structuredPayload, headers, 2);
 
-        // Fallback for older edge implementation.
-        if (error || data?.error) {
-          const legacy = await invokeGeminiWithRetry(
-            {
-              action: 'chat',
-              message,
-              userName,
-              history: history?.map((h) => ({ role: h.role, content: h.text || h.content })),
-              productsContext: productsContext.map((p: any) => ({
-                item: p.name,
-                price: p.price,
-                pharmacyName: p.pharmacyName,
-              })),
-            },
-            headers,
-            2,
-          );
-          data = legacy.data;
-          error = legacy.error;
-        }
-
         if (error) {
           console.error('Erro na Edge Function:', error);
           return localFallback;
@@ -416,9 +476,6 @@ export const getChatSession = () => {
         const reply = data?.reply || undefined;
         const actions = parseActions(data?.actions);
         const text = composeReplyText(reply, data?.text || 'Desculpe, recebi uma resposta vazia.');
-
-        saveChatMessage(userId, 'user', message);
-        saveChatMessage(userId, 'model', text);
 
         return {
           text,

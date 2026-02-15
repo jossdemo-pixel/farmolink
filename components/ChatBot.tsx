@@ -84,6 +84,8 @@ export const ChatBot: React.FC<ChatBotProps> = ({ onAction, preferredPharmacyId 
         const history = await fetchChatHistory(data.user.id);
         if (history.length > 0) {
           setMessages(history.map((h: any) => ({ role: h.role, text: h.content })));
+          const lastConversationId = history[history.length - 1]?.conversationId;
+          if (lastConversationId) setConversationId(lastConversationId);
         } else {
           setMessages([DEFAULT_GREETING_MESSAGE]);
         }

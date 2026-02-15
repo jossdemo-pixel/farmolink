@@ -107,6 +107,7 @@ const EMERGENCY_KEYWORDS = [
   "anafilaxia",
   "sangramento intenso",
 ];
+const FORBIDDEN_SLANG_TERMS = ["mambo"];
 
 const NAVIGATION_KEYWORDS = [
   "como enviar receita",
@@ -214,6 +215,15 @@ const normalize = (value: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+
+const sanitizeTone = (value: string) => {
+  let output = String(value || "");
+  FORBIDDEN_SLANG_TERMS.forEach((term) => {
+    const regex = new RegExp(`\\b${term}\\b`, "gi");
+    output = output.replace(regex, "cliente");
+  });
+  return output.replace(/\s{2,}/g, " ").trim();
+};
 
 const includesAny = (text: string, words: string[]) =>
   words.filter((w) => text.includes(w)).filter((v, i, arr) => arr.indexOf(v) === i);
@@ -431,9 +441,38 @@ const buildSchedulingReply = () => ({
 });
 
 const buildInventoryReply = (message: string, productsContext: any[]) => {
-  const matched = matchProductsFromContext(message, productsContext);
+  let matched = matchProductsFromContext(message, productsContext);
   const asksPrice = hasPriceIntent(message);
   const reserveIntent = wantsReserveIntent(message);
+
+  if (matched.length === 0 && (asksPrice || reserveIntent)) {
+    const source = Array.isArray(productsContext) ? productsContext : [];
+    const grouped = new Map<string, any[]>();
+    source.forEach((item: any) => {
+      const key = normalize(String(item?.name || ""));
+      if (!key) return;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(item);
+    });
+
+    if (grouped.size === 1) {
+      matched = Array.from(grouped.values())[0].slice(0, 3);
+    } else if (grouped.size > 1) {
+      const options = Array.from(grouped.values())
+        .slice(0, 3)
+        .map((group) => String(group?.[0]?.name || "Produto"))
+        .join(", ");
+      return {
+        reply: {
+          greeting: "Ola.",
+          objective: "Para informar preco ou reserva, preciso confirmar qual produto voce quer.",
+          safety: "Nao confirmo disponibilidade sem identificar o item correto no catalogo.",
+          cta: `Escolha um destes itens: ${options}.`,
+        },
+        actions: [{ type: "OPEN_PHARMACIES_NEARBY" }],
+      };
+    }
+  }
 
   if (matched.length === 0) {
     return {
@@ -534,6 +573,11 @@ const enforceReplyCompliance = (
   if (!String(safeReply.greeting || "").trim()) safeReply.greeting = "Ola.";
   if (!String(safeReply.objective || "").trim()) safeReply.objective = "Posso ajudar com o fluxo correto dentro da FarmoLink.";
   if (!String(safeReply.cta || "").trim()) safeReply.cta = "Quer que eu continue por este caminho?";
+
+  safeReply.greeting = sanitizeTone(String(safeReply.greeting || ""));
+  safeReply.objective = sanitizeTone(String(safeReply.objective || ""));
+  safeReply.safety = sanitizeTone(String(safeReply.safety || ""));
+  safeReply.cta = sanitizeTone(String(safeReply.cta || ""));
 
   return {
     reply: {
@@ -816,6 +860,7 @@ const generateBotReply = async (
     "Quando citar produto/preco, sempre informe a farmacia de referencia.",
     "Nao liste produtos/precos sem pedido explicito do utente.",
     "Nao solicite nome/telefone para agendamento no chat.",
+    "Nunca use o termo mambo para se referir ao cliente.",
     "Actions permitidas: OPEN_UPLOAD_RX, OPEN_PRESCRIPTIONS, OPEN_PHARMACIES_NEARBY, OPEN_CART, ADD_TO_CART, OPEN_SUPPORT.",
   ].join("\n");
 
@@ -827,7 +872,7 @@ const generateBotReply = async (
       responseMimeType: "application/json",
       responseSchema: schema,
       systemInstruction:
-        "Voce e o FarmoBot da FarmoLink. Sempre entregue saudacao neutra, resposta objetiva, aviso de seguranca quando aplicavel e CTA unico. Nao use girias. Nunca invente dados de catalogo.",
+        "Voce e o FarmoBot da FarmoLink. Sempre entregue saudacao neutra, resposta objetiva, aviso de seguranca quando aplicavel e CTA unico. Nao use girias e nunca use o termo mambo. Nunca invente dados de catalogo.",
     },
   });
 
@@ -1054,27 +1099,6 @@ serve(async (req) => {
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
-    }
-
-    // Legacy chat action (kept for backward compatibility).
-    if (action === "chat") {
-      const chatHistory = (history || []).map((h: any) => ({
-        role: h.role === "model" ? "model" : "user",
-        parts: [{ text: h.content || h.text }],
-      }));
-      const contextText = productsContext ? `\n\nPRODUTOS:\n${JSON.stringify(productsContext)}` : "";
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [...chatHistory, { role: "user", parts: [{ text: String(message || "") + contextText }] }],
-        config: {
-          systemInstruction:
-            "Voce e o FarmoBot Angola da FarmoLink. Seja breve. Nunca prescreva dose personalizada.",
-          temperature: 0.3,
-        },
-      });
-      return new Response(JSON.stringify({ text: response.text }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
     }
 
     if (action === "vision") {

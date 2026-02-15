@@ -269,35 +269,6 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 -- FARMOBOT: ESTRUTURA ALINHADA AO PROJETO ATUAL
 -- ========================================================================
 
--- Histórico utilizado diretamente pelo frontend atual (services/geminiService.ts)
-CREATE TABLE IF NOT EXISTS public.bot_conversations (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-ALTER TABLE public.bot_conversations
-    ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
-    ADD COLUMN IF NOT EXISTS role TEXT,
-    ADD COLUMN IF NOT EXISTS content TEXT,
-    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
-
-UPDATE public.bot_conversations
-SET role = COALESCE(role, 'model'),
-    content = COALESCE(content, '')
-WHERE role IS NULL OR content IS NULL;
-
-ALTER TABLE public.bot_conversations
-    ALTER COLUMN role SET NOT NULL,
-    ALTER COLUMN content SET NOT NULL;
-
-ALTER TABLE public.bot_conversations DROP CONSTRAINT IF EXISTS chk_bot_conversations_role;
-ALTER TABLE public.bot_conversations
-    ADD CONSTRAINT chk_bot_conversations_role
-    CHECK (role IN ('user', 'model'));
-
 DO $$ BEGIN
     CREATE TYPE public.conversation_status AS ENUM ('bot_active', 'escalated_pharmacy', 'escalated_admin', 'resolved');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -506,6 +477,16 @@ ALTER TABLE public.conversation_escalations
     CHECK (to_level >= from_level AND from_level BETWEEN 1 AND 3 AND to_level BETWEEN 1 AND 3);
 
 -- Limpeza de estruturas não usadas no projeto atual.
+DROP INDEX IF EXISTS public.idx_bot_conversations_user_created;
+DO $$
+BEGIN
+    IF to_regclass('public.bot_conversations') IS NOT NULL THEN
+        EXECUTE 'DROP POLICY IF EXISTS "Bot Conversations Select" ON public.bot_conversations';
+        EXECUTE 'DROP POLICY IF EXISTS "Bot Conversations Insert" ON public.bot_conversations';
+        EXECUTE 'DROP POLICY IF EXISTS "Bot Conversations Delete" ON public.bot_conversations';
+    END IF;
+END $$;
+DROP TABLE IF EXISTS public.bot_conversations CASCADE;
 DROP TABLE IF EXISTS public.conversation_action_events CASCADE;
 DROP TABLE IF EXISTS public.farmobot_trigger_catalog CASCADE;
 
@@ -626,7 +607,6 @@ ALTER TABLE public.admin_faq ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_about ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.system_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.financial_ledger ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.bot_conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversation_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversation_escalations ENABLE ROW LEVEL SECURITY;
@@ -770,30 +750,7 @@ CREATE POLICY "Ledger Admin View" ON public.financial_ledger FOR SELECT USING (i
 DROP POLICY IF EXISTS "Ledger Admin Insert" ON public.financial_ledger;
 CREATE POLICY "Ledger Admin Insert" ON public.financial_ledger FOR INSERT WITH CHECK (is_admin());
 
--- POLÍTICAS FARMOBOT (histórico legado + conversas estruturadas)
-DROP POLICY IF EXISTS "Bot Conversations Select" ON public.bot_conversations;
-CREATE POLICY "Bot Conversations Select" ON public.bot_conversations
-FOR SELECT
-USING (
-    user_id = auth.uid()
-    OR is_admin()
-);
-
-DROP POLICY IF EXISTS "Bot Conversations Insert" ON public.bot_conversations;
-CREATE POLICY "Bot Conversations Insert" ON public.bot_conversations
-FOR INSERT
-WITH CHECK (
-    (user_id = auth.uid() AND role IN ('user', 'model'))
-    OR is_admin()
-);
-
-DROP POLICY IF EXISTS "Bot Conversations Delete" ON public.bot_conversations;
-CREATE POLICY "Bot Conversations Delete" ON public.bot_conversations
-FOR DELETE
-USING (
-    user_id = auth.uid()
-    OR is_admin()
-);
+-- POLÍTICAS FARMOBOT (conversas estruturadas)
 
 DROP POLICY IF EXISTS "Conversations Select" ON public.conversations;
 CREATE POLICY "Conversations Select" ON public.conversations
@@ -1247,7 +1204,6 @@ CREATE INDEX IF NOT EXISTS idx_admin_faq_order ON public.admin_faq("order");
 CREATE INDEX IF NOT EXISTS idx_system_config_key ON public.system_config(config_key);
 CREATE INDEX IF NOT EXISTS idx_financial_ledger_order ON public.financial_ledger(order_id);
 CREATE INDEX IF NOT EXISTS idx_financial_ledger_pharmacy_created ON public.financial_ledger(pharmacy_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_bot_conversations_user_created ON public.bot_conversations(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_status_updated ON public.conversations(user_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_pharmacy_status_updated ON public.conversations(pharmacy_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_level_risk_updated ON public.conversations(escalation_level, risk_level, updated_at DESC);
