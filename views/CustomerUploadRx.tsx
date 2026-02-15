@@ -21,7 +21,7 @@ const MedicalDisclaimer = ({ method }: { method: 'MANUAL' | 'AI' | null }) => {
                             Assistente de Receitas IA <Sparkles size={12} className="text-blue-500"/>
                         </p>
                         <p className="text-[10px] text-blue-700 leading-relaxed font-medium">
-                            A IA apenas transcreve o texto para facilitar. <strong>A validaÃ§Ã£o final Ã© sempre do farmacÃªutico.</strong>
+                            A IA apenas transcreve o texto para facilitar. <strong>A validação final é sempre do farmacêutico.</strong>
                         </p>
                     </div>
                 </div>
@@ -36,9 +36,9 @@ const MedicalDisclaimer = ({ method }: { method: 'MANUAL' | 'AI' | null }) => {
                     <ShieldCheck size={20} />
                 </div>
                 <div className="space-y-2">
-                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">SeguranÃ§a Garantida</p>
+                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Segurança Garantida</p>
                     <p className="text-[10px] text-gray-400 leading-relaxed">
-                        As farmÃ¡cias parceiras sÃ³ entregam medicamentos se apresentares a receita original fÃ­sica no ato da entrega ou levantamento. O FarmoLink serve para reservares e saberes os preÃ§os primeiro.
+                        As farmácias parceiras só entregam medicamentos se apresentares a receita original física no ato da entrega ou levantamento. O FarmoLink serve para reservares e saberes os preços primeiro.
                     </p>
                 </div>
             </div>
@@ -56,7 +56,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
   const [userNotes, setUserNotes] = useState('');
   
-  // NOVO: Estado de preferÃªncia de entrega
+  // NOVO: Estado de preferência de entrega
   const [deliveryType, setDeliveryType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -110,7 +110,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
         setStep('CONFIRM');
         playSound('success');
     } catch (err) {
-        alert("NÃ£o consegui carregar a foto. Verifica a tua internet.");
+        alert("Não consegui carregar a foto. Verifica a tua internet.");
         setStep('UPLOAD');
     }
   };
@@ -126,14 +126,14 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
           targets = recommendedTargets;
           
           if (targets.length === 0) {
-              alert("NÃ£o hÃ¡ farmÃ¡cias disponÃ­veis no momento.");
+              alert("Não há farmácias disponíveis no momento.");
               return;
           }
       }
 
       const selectedPharmacy = pharmacies.find(p => p.id === targets[0]);
       if (deliveryType === 'DELIVERY' && selectedPharmacy && !selectedPharmacy.deliveryActive) {
-          alert("A farmÃ¡cia selecionada nÃ£o tem entrega ativa. Mude para 'Vou Buscar (Loja)' ou escolha outra farmÃ¡cia.");
+          alert("A farmácia selecionada não tem entrega ativa. Mude para 'Vou Buscar (Loja)' ou escolha outra farmácia.");
           return;
       }
 
@@ -144,10 +144,10 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
       
       setIsSending(true);
 
-      const deliveryTag = deliveryType === 'DELIVERY' ? "[ENTREGA AO DOMICÃLIO]" : "[VOU BUSCAR NA LOJA]";
+      const deliveryTag = deliveryType === 'DELIVERY' ? "[ENTREGA AO DOMICÍLIO]" : "[VOU BUSCAR NA LOJA]";
       
-      // ConstrÃ³i a nota final com a preferÃªncia
-      const finalNotes = `${deliveryTag} ${userNotes.trim() ? `Obs: ${userNotes}` : (method === 'MANUAL' ? "Aguardo orÃ§amento." : "Pedido com Ajuda IA")}`;
+      // Constrói a nota final com a preferência
+      const finalNotes = `${deliveryTag} ${userNotes.trim() ? `Obs: ${userNotes}` : (method === 'MANUAL' ? "Aguardo orçamento." : "Pedido com Ajuda IA")}`;
 
       const result = await createPrescriptionRequest(
           user.id, 
@@ -169,7 +169,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
   const togglePharmacy = (id: string) => {
       const pharmacy = pharmacies.find(p => p.id === id);
       if (deliveryType === 'DELIVERY' && pharmacy && !pharmacy.deliveryActive) {
-          alert("Esta farmÃ¡cia nÃ£o estÃ¡ com entrega ativa. Escolha outra ou mude para retirada em loja.");
+          alert("Esta farmácia não está com entrega ativa. Escolha outra ou mude para retirada em loja.");
           return;
       }
       setSelectedPharmacies(prev => (prev[0] === id ? [] : [id]));
@@ -183,7 +183,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
           <div className="space-y-10 py-10 animate-fade-in">
               <div className="text-center space-y-4">
                   <h1 className="text-4xl font-black text-gray-800 tracking-tighter">Como queres mandar a receita?</h1>
-                  <p className="text-gray-500 max-w-lg mx-auto font-medium">Escolhe a forma mais rÃ¡pida de pedir anÃ¡lise e receber resposta de uma farmÃ¡cia por vez.</p>
+                  <p className="text-gray-500 max-w-lg mx-auto font-medium">Escolhe a forma mais rápida de pedir análise e receber resposta de uma farmácia por vez.</p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
@@ -196,7 +196,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                           <Camera size={40} />
                       </div>
                       <h3 className="text-2xl font-black text-gray-800 mb-2">Mandar Direto</h3>
-                      <p className="text-sm text-gray-500 font-medium leading-relaxed">Tu escolhes as farmÃ¡cias e elas respondem com os preÃ§os delas.</p>
+                      <p className="text-sm text-gray-500 font-medium leading-relaxed">Tu escolhes as farmácias e elas respondem com os preços delas.</p>
                       <div className="mt-8 flex items-center gap-2 text-emerald-600 font-black text-xs uppercase tracking-widest">Tirar Foto <ChevronRight size={16}/></div>
                   </div>
 
@@ -204,12 +204,12 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                     onClick={() => { setMethod('AI'); setStep('UPLOAD'); }}
                     className="bg-white p-8 rounded-[48px] border-4 border-transparent hover:border-blue-500 shadow-xl cursor-pointer transition-all hover:scale-105 group relative overflow-hidden"
                   >
-                      <div className="absolute top-6 right-6 bg-blue-100 text-blue-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">Super RÃ¡pido</div>
+                      <div className="absolute top-6 right-6 bg-blue-100 text-blue-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">Super Rápido</div>
                       <div className="w-20 h-20 bg-blue-50 text-blue-500 rounded-[28px] flex items-center justify-center mb-6 group-hover:bg-blue-600 group-hover:text-white transition-colors">
                           <BrainCircuit size={40} />
                       </div>
                       <h3 className="text-2xl font-black text-gray-800 mb-2">Scan Inteligente</h3>
-                      <p className="text-sm text-gray-500 font-medium leading-relaxed">A nossa IA lÃª a letra do mÃ©dico e acelera o pedido para a farmÃ¡cia que escolheres.</p>
+                      <p className="text-sm text-gray-500 font-medium leading-relaxed">A nossa IA lê a letra do médico e acelera o pedido para a farmácia que escolheres.</p>
                       <div className="mt-8 flex items-center gap-2 text-blue-600 font-black text-xs uppercase tracking-widest">Analisar com IA <Sparkles size={16}/></div>
                   </div>
               </div>
@@ -229,7 +229,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                     {method === 'AI' ? <BrainCircuit size={48}/> : <Camera size={48} />}
                 </div>
                 <h3 className="text-2xl font-black text-gray-800 mb-2">Anexar Receita</h3>
-                <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">CÃ¢mera ou Galeria</p>
+                <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">Câmera ou Galeria</p>
                 <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
             </Card>
           </div>
@@ -239,8 +239,8 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
           <div className="text-center py-32 animate-fade-in space-y-6">
               <div className={`w-24 h-24 border-8 rounded-full animate-spin mx-auto shadow-inner ${method === 'AI' ? 'border-blue-100 border-t-blue-600' : 'border-emerald-100 border-t-emerald-600'}`}></div>
               <div>
-                  <h2 className="text-2xl font-black text-gray-800">{method === 'AI' ? 'IA estÃ¡ a ler a letra...' : 'A carregar a foto...'}</h2>
-                  <p className="text-gray-400 font-bold uppercase tracking-widest text-[10px] mt-2">SÃ³ mais um bocado</p>
+                  <h2 className="text-2xl font-black text-gray-800">{method === 'AI' ? 'IA está a ler a letra...' : 'A carregar a foto...'}</h2>
+                  <p className="text-gray-400 font-bold uppercase tracking-widest text-[10px] mt-2">Só mais um bocado</p>
               </div>
           </div>
       )}
@@ -274,7 +274,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                                 <h4 className="text-xl font-black flex items-center gap-2"><BrainCircuit/> IA Identificou:</h4>
                             </div>
 
-                            {/* AVISO LEGAL ESTÃTICO (TEXTO AJUSTADO) */}
+                            {/* AVISO LEGAL ESTÁTICO (TEXTO AJUSTADO) */}
                             
                             <div className="bg-white/10 border border-white/20 p-4 rounded-2xl mb-6 flex items-start gap-3">
                                 <div className="p-2 bg-yellow-400 text-yellow-900 rounded-lg shrink-0">
@@ -283,7 +283,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                                 <div>
                                     <p className="text-[10px] font-black uppercase text-yellow-200 mb-1">Aviso Importante</p>
                                     <p className="text-xs font-medium leading-tight">
-                                        A avaliaÃ§Ã£o com IA nÃ£o Ã© 100% eficaz e nunca deve substituir um farmacÃªutico.
+                                        A avaliação com IA não é 100% eficaz e nunca deve substituir um farmacêutico.
                                     </p>
                                 </div>
                             </div>
@@ -298,7 +298,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                             </div>
                             <div className="mt-4 p-3 bg-blue-800/30 rounded-xl flex items-center gap-2 border border-blue-500/30">
                                 <ShieldCheck size={14} className="text-blue-300 shrink-0"/>
-                                <p className="text-[9px] font-black uppercase text-blue-200">As farmÃ¡cias confirmarÃ£o o stock real</p>
+                                <p className="text-[9px] font-black uppercase text-blue-200">As farmácias confirmarão o stock real</p>
                             </div>
                           </div>
                           <Sparkles className="absolute -right-6 -bottom-6 text-white/5 w-32 h-32" />
@@ -307,7 +307,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
 
                   <Card className="p-8 rounded-[40px] border-gray-100 shadow-sm space-y-6">
                       
-                      {/* NOVO SELETOR DE PREFERÃŠNCIA DE ENTREGA */}
+                      {/* NOVO SELETOR DE PREFERÊNCIA DE ENTREGA */}
                       <div>
                           <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
                               <Truck size={14} className="text-emerald-500"/> Como prefere receber?
@@ -330,7 +330,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                           </div>
                           {deliveryType === 'DELIVERY' && (
                               <p className="text-[9px] font-bold text-emerald-600 mt-2 text-center bg-emerald-50 py-2 rounded-lg">
-                                  Nota: Algumas farmÃ¡cias podem nÃ£o ter serviÃ§o de entrega ativo.
+                                  Nota: Algumas farmácias podem não ter serviço de entrega ativo.
                               </p>
                           )}
                       </div>
@@ -348,7 +348,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                           
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[320px] overflow-y-auto custom-scrollbar pr-2 mb-6">
                               {sortedPharmacies.map((p, index) => {
-                                  // Verifica se hÃ¡ conflito de entrega
+                                  // Verifica se há conflito de entrega
                                   const deliveryConflict = deliveryType === 'DELIVERY' && !p.deliveryActive;
                                   
                                   return (
@@ -390,11 +390,11 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
 
                       <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
                           <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-                              <MessageSquare size={14} /> ObservaÃ§Ãµes Adicionais
+                              <MessageSquare size={14} /> Observações Adicionais
                           </h5>
                           <textarea
                               className="w-full p-3 bg-white border-none rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-emerald-100 h-20 resize-none text-gray-700"
-                              placeholder="Ex: Tenho preferÃªncia por genÃ©ricos. / JÃ¡ tenho o Paracetamol."
+                              placeholder="Ex: Tenho preferência por genéricos. / Já tenho o Paracetamol."
                               value={userNotes}
                               onChange={e => setUserNotes(e.target.value)}
                           />
@@ -408,7 +408,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                         className={`w-full py-6 rounded-[32px] font-black text-xl shadow-2xl active:scale-95 transition-all text-white ${method === 'AI' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-100' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'}`}
                       >
                           {isSending ? <Loader2 className="animate-spin mr-2" /> : <Send size={24} className="mr-2"/>}
-                          {method === 'AI' ? 'PEDIR ORÃ‡AMENTO' : 'ENVIAR PEDIDO AGORA'}
+                          {method === 'AI' ? 'PEDIR ORÇAMENTO' : 'ENVIAR PEDIDO AGORA'}
                       </Button>
                   </div>
               </div>
@@ -419,3 +419,4 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
     </div>
   );
 };
+

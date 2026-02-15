@@ -97,7 +97,7 @@ export const clearAllCache = () => {
     Object.keys(localStorage)
         .filter(key => key.startsWith(CACHE_KEY_PREFIX))
         .forEach(key => localStorage.removeItem(key));
-    console.log("ðŸ§¹ Cache local esvaziado.");
+    console.log("🧹 Cache local esvaziado.");
 };
 
 // --- REVIEWS ---
@@ -115,7 +115,7 @@ export const submitReview = async (orderId: string, pharmacyId: string, customer
 };
 
 export const fetchPharmacyReviews = async (pharmacyId: string) => {
-    // OTIMIZAÃ‡ÃƒO: select especÃ­fico
+    // OTIMIZAÇÃO: select específico
     const { data } = await supabase
         .from('reviews')
         .select('customer_name, rating, comment, created_at')
@@ -163,7 +163,7 @@ export const fetchLandingContent = async (): Promise<{ slides: CarouselSlide[], 
     };
 }
 
-// Buscar todos os slides para ediÃ§Ã£o pelo admin
+// Buscar todos os slides para edição pelo admin
 export const fetchAllCarouselSlides = async (): Promise<CarouselSlide[]> => {
     try {
         const { data: slides, error } = await supabase
@@ -172,11 +172,11 @@ export const fetchAllCarouselSlides = async (): Promise<CarouselSlide[]> => {
             .order('order', { ascending: true });
         
         if (error) {
-            console.error("âŒ Erro ao carregar slides:", error);
+            console.error("❌ Erro ao carregar slides:", error);
             return [];
         }
 
-        console.log("âœ… Slides carregados para ediÃ§Ã£o:", slides);
+        console.log("✅ Slides carregados para edição:", slides);
 
         return (slides || []).map((s: any) => ({
             id: s.id,
@@ -187,7 +187,7 @@ export const fetchAllCarouselSlides = async (): Promise<CarouselSlide[]> => {
             order: s.order
         }));
     } catch (e) {
-        console.error("âŒ Erro fetchAllCarouselSlides:", e);
+        console.error("❌ Erro fetchAllCarouselSlides:", e);
         return [];
     }
 }
@@ -208,14 +208,14 @@ export const saveAllCarouselSlides = async (slides: CarouselSlide[]): Promise<bo
                 .eq('id', slide.id);
             
             if (error) {
-                console.error("âŒ Erro ao salvar slide:", error);
+                console.error("❌ Erro ao salvar slide:", error);
                 return false;
             }
         }
-        console.log("âœ… Todos os slides salvos com sucesso");
+        console.log("✅ Todos os slides salvos com sucesso");
         return true;
     } catch (e) {
-        console.error("âŒ Erro saveAllCarouselSlides:", e);
+        console.error("❌ Erro saveAllCarouselSlides:", e);
         return false;
     }
 }
@@ -235,13 +235,13 @@ export const saveCarouselSlide = async (slide: CarouselSlide): Promise<boolean> 
             .eq('id', slide.id);
         
         if (error) {
-            console.error("âŒ Erro ao salvar slide:", error);
+            console.error("❌ Erro ao salvar slide:", error);
             return false;
         }
-        console.log("âœ… Slide salvo com sucesso");
+        console.log("✅ Slide salvo com sucesso");
         return true;
     } catch (e) {
-        console.error("âŒ Erro saveCarouselSlide:", e);
+        console.error("❌ Erro saveCarouselSlide:", e);
         return false;
     }
 }
@@ -342,7 +342,7 @@ export const sendSystemNotification = async (target: 'ALL' | 'CUSTOMER' | 'PHARM
     } catch (e) { return false; }
 };
 
-// --- CACHE PARA RELATÃ“RIOS FINANCEIROS ---
+// --- CACHE PARA RELATÓRIOS FINANCEIROS ---
 const FINANCIAL_CACHE_KEY = 'farmolink_financial_report';
 export const DEFAULT_FINANCIAL_SETTLEMENT_CYCLE: SettlementCycle = 'MONTHLY';
 
@@ -451,11 +451,11 @@ export const fetchAdminBanners = async (): Promise<any[]> => {
             .order('"order"', { ascending: true });
         
         if (error) {
-            console.error("âŒ Erro ao carregar banners ativos:", error);
+            console.error("❌ Erro ao carregar banners ativos:", error);
             return [];
         }
 
-        console.log("âœ… Banners ativos carregados:", data);
+        console.log("✅ Banners ativos carregados:", data);
 
         return (data || []).map((b: any) => ({
             id: b.id,
@@ -468,7 +468,7 @@ export const fetchAdminBanners = async (): Promise<any[]> => {
             active: b.is_active
         }));
     } catch (e) {
-        console.error("âŒ Erro fetchAdminBanners:", e);
+        console.error("❌ Erro fetchAdminBanners:", e);
         return [];
     }
 };
@@ -481,11 +481,11 @@ export const fetchAllAdminBanners = async (): Promise<any[]> => {
             .order('"order"', { ascending: true });
         
         if (error) {
-            console.error("âŒ Erro ao carregar todos os banners:", error);
+            console.error("❌ Erro ao carregar todos os banners:", error);
             return [];
         }
 
-        console.log("âœ… Banners carregados do BD:", data);
+        console.log("✅ Banners carregados do BD:", data);
 
         return (data || []).map((b: any) => ({
             id: b.id,
@@ -498,7 +498,7 @@ export const fetchAllAdminBanners = async (): Promise<any[]> => {
             active: b.is_active
         }));
     } catch (e) {
-        console.error("âŒ Erro fetchAllAdminBanners:", e);
+        console.error("❌ Erro fetchAllAdminBanners:", e);
         return [];
     }
 };
@@ -517,20 +517,20 @@ export const saveAdminBanner = async (banner: any): Promise<boolean> => {
             updated_at: new Date().toISOString()
         };
 
-        console.log("ðŸ“¤ Salvando banner individual:", data);
+        console.log("📤 Salvando banner individual:", data);
 
         const { error } = await supabase
             .from('admin_banners')
             .upsert([data]);
 
         if (error) {
-            console.error("âŒ Erro ao salvar banner:", error);
+            console.error("❌ Erro ao salvar banner:", error);
             return false;
         }
-        console.log("âœ… Banner salvo com sucesso!");
+        console.log("✅ Banner salvo com sucesso!");
         return true;
     } catch (e) {
-        console.error("âŒ Erro saveAdminBanner:", e);
+        console.error("❌ Erro saveAdminBanner:", e);
         return false;
     }
 };
@@ -549,20 +549,20 @@ export const saveAllAdminBanners = async (banners: any[]): Promise<boolean> => {
             updated_at: new Date().toISOString()
         }));
 
-        console.log("ðŸ“¤ Salvando banners no Supabase:", batch);
+        console.log("📤 Salvando banners no Supabase:", batch);
 
         const { error } = await supabase
             .from('admin_banners')
             .upsert(batch);
 
         if (error) {
-            console.error("âŒ Erro ao salvar banners:", error);
+            console.error("❌ Erro ao salvar banners:", error);
             return false;
         }
-        console.log("âœ… Banners salvos com sucesso!");
+        console.log("✅ Banners salvos com sucesso!");
         return true;
     } catch (e) {
-        console.error("âŒ Erro saveAllAdminBanners:", e);
+        console.error("❌ Erro saveAllAdminBanners:", e);
         return false;
     }
 };
@@ -675,7 +675,7 @@ export const saveAdminAbout = async (about: any): Promise<boolean> => {
             {
                 id: `about-mission-${Date.now()}`,
                 section_type: 'mission',
-                title: 'Nossa MissÃ£o',
+                title: 'Nossa Missão',
                 content: about.mission,
                 order: 1,
                 is_active: true,
@@ -684,7 +684,7 @@ export const saveAdminAbout = async (about: any): Promise<boolean> => {
             {
                 id: `about-innovation-${Date.now()}`,
                 section_type: 'innovation',
-                title: 'InovaÃ§Ã£o Local',
+                title: 'Inovação Local',
                 content: about.innovation,
                 order: 2,
                 is_active: true,
@@ -963,5 +963,6 @@ export const openSupportWhatsApp = async (message?: string): Promise<boolean> =>
         return false;
     }
 };
+
 
 

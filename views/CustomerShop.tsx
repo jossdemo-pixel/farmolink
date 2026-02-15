@@ -1,8 +1,8 @@
-
+﻿
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft, Trash2 } from 'lucide-react';
 import { Product, Pharmacy, PRODUCT_CATEGORIES, CartItem, Order, ChatMessage } from '../types';
-import { Button, Badge, Card } from '../components/UI';
+import { Button, Badge } from '../components/UI';
 import { playSound } from '../services/soundService';
 import { formatProductNameForCustomer } from '../services/geminiService';
 import { fetchProducts } from '../services/productService';
@@ -388,107 +388,116 @@ export const PharmacyProfileView = ({ pharmacy, onAddToCart, onBack }: { pharmac
 };
 
 export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAddress, onBack }: any) => {
-    const [type, setType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
+    const [type, setType] = useState<'DELIVERY' | 'PICKUP'>(() => userAddress?.trim() ? 'DELIVERY' : 'PICKUP');
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentAddress, setCurrentAddress] = useState(userAddress || '');
     const [isLocating, setIsLocating] = useState(false);
+    const [addressError, setAddressError] = useState<string | null>(null);
 
     const sub = items.reduce((a: any, b: any) => a + (b.price * b.quantity), 0);
-    const pharm = items.length > 0 ? pharmacies.find((p:any) => p.id === items[0].pharmacyId) : null;
+    const pharm = items.length > 0 ? pharmacies.find((p: any) => p.id === items[0].pharmacyId) : null;
     const fee = type === 'DELIVERY' ? (pharm?.deliveryFee || 0) : 0;
     const total = sub + fee;
 
-    // Se a farmácia não suportar entrega, forçamos o tipo PICKUP
+    // Se a farmacia nao suportar entrega, forcamos PICKUP.
     useEffect(() => {
         if (pharm && !pharm.deliveryActive && type === 'DELIVERY') {
             setType('PICKUP');
         }
     }, [pharm, type]);
 
+    useEffect(() => {
+        if (type !== 'DELIVERY' || currentAddress.trim()) {
+            setAddressError(null);
+        }
+    }, [type, currentAddress]);
+
     const handleUseGps = async () => {
         setIsLocating(true);
         playSound('click');
+
         const pos = await getCurrentPosition();
         if (pos) {
             const lat = pos.lat.toFixed(6);
             const lng = pos.lng.toFixed(6);
             const mapUrl = `https://maps.google.com/?q=${lat},${lng}`;
-            const accuracyLine = typeof pos.accuracy === 'number' ? `Precisão GPS ~${Math.round(pos.accuracy)}m` : 'Precisão GPS indisponível';
+            const accuracyLine = typeof pos.accuracy === 'number'
+                ? `Precisao GPS ~${Math.round(pos.accuracy)}m`
+                : 'Precisao GPS indisponivel';
+
             setCurrentAddress(`${accuracyLine}\nGPS: ${lat}, ${lng}\nMapa: ${mapUrl}`);
+            setAddressError(null);
+
             if (typeof pos.accuracy === 'number' && pos.accuracy > 150) {
-                alert("GPS com baixa precisão. Confira no mapa e ajuste a morada manualmente.");
+                alert('GPS com baixa precisao. Confira no mapa e ajuste a morada manualmente.');
             }
+
             playSound('success');
         } else {
-            alert("Não foi possível aceder ao GPS. Verifique as permissões.");
+            setAddressError('Nao foi possivel obter a localizacao automatica. Preencha manualmente.');
+            alert('Nao foi possivel aceder ao GPS. Verifique as permissoes.');
         }
+
         setIsLocating(false);
     };
 
-    const handleConfirmCheckout = async () => { 
-        if (isProcessing) return; 
-        if (type === 'DELIVERY' && !currentAddress) {
-            alert("Por favor, insira a morada de entrega.");
+    const handleConfirmCheckout = async () => {
+        if (isProcessing) return;
+
+        const trimmedAddress = currentAddress.trim();
+        if (type === 'DELIVERY' && !trimmedAddress) {
+            setAddressError('Adicione a localizacao de entrega para continuar.');
+            playSound('error');
             return;
         }
-        setIsProcessing(true); 
-        try { 
-            await onCheckout(type, currentAddress, total); 
-        } finally { 
-            setIsProcessing(false); 
-        } 
+
+        setAddressError(null);
+        setIsProcessing(true);
+
+        try {
+            await onCheckout(type, trimmedAddress, total);
+        } finally {
+            setIsProcessing(false);
+        }
     };
+
+    const deliveryMissingAddress = type === 'DELIVERY' && !currentAddress.trim();
 
     return (
         <div className="max-w-4xl mx-auto py-10 animate-fade-in pb-32">
-            <button onClick={onBack} className="text-gray-400 font-black text-xs uppercase mb-6 flex items-center gap-2" disabled={isProcessing}><ArrowLeft size={16}/> Ver mais medicamentos</button>
+            <button onClick={onBack} className="text-gray-400 font-black text-xs uppercase mb-6 flex items-center gap-2" disabled={isProcessing}>
+                <ArrowLeft size={16} /> Ver mais medicamentos
+            </button>
             <h2 className="text-3xl font-black text-gray-800 mb-8">Finalizar Pedido</h2>
-            
+
             {items.length === 0 ? (
                 <div className="bg-white p-20 rounded-[40px] border border-dashed text-center flex flex-col items-center">
-                    <Store className="text-gray-100 mb-4" size={80}/>
-                    <p className="text-gray-400 font-black uppercase text-sm">O cesto está vazio</p>
+                    <Store className="text-gray-100 mb-4" size={80} />
+                    <p className="text-gray-400 font-black uppercase text-sm">O cesto esta vazio</p>
                 </div>
             ) : (
                 <div className="grid lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-6">
                         <div className="bg-emerald-50 p-6 rounded-[32px] border border-emerald-100 flex items-center gap-4">
-                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-emerald-600 shadow-sm"><Store/></div>
+                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-emerald-600 shadow-sm">
+                                <Store />
+                            </div>
                             <div>
                                 <h3 className="font-black text-xl text-emerald-900">{pharm?.name}</h3>
                                 <p className="text-[10px] text-emerald-600 font-bold uppercase">
-                                    {pharm?.deliveryActive ? `Entrega em ${pharm?.minTime}` : 'Apenas Levantamento em Loja'}
+                                    {pharm?.deliveryActive ? `Entrega em ${pharm?.minTime}` : 'Apenas levantamento em loja'}
                                 </p>
                             </div>
                         </div>
-
-                        {type === 'DELIVERY' && (
-                            <Card className="p-8 rounded-[40px] shadow-sm border-gray-100">
-                                <div className="flex justify-between items-center mb-6">
-                                    <h4 className="text-sm font-black text-gray-800 uppercase tracking-widest flex items-center gap-2"><MapPin size={18} className="text-emerald-500"/> Local de Entrega</h4>
-                                    <button 
-                                        onClick={handleUseGps} 
-                                        disabled={isLocating}
-                                        className="text-[10px] font-black text-blue-600 uppercase flex items-center gap-1 bg-blue-50 px-3 py-2 rounded-xl hover:bg-blue-100 transition-all"
-                                    >
-                                        {isLocating ? <Loader2 className="animate-spin" size={12}/> : <Navigation size={12}/>}
-                                        {isLocating ? 'Obtendo...' : 'Usar GPS'}
-                                    </button>
-                                </div>
-                                <textarea 
-                                    className="w-full p-4 bg-gray-50 border rounded-2xl outline-none focus:ring-4 focus:ring-emerald-50 font-medium text-sm transition-all min-h-[100px]" 
-                                    placeholder="Descreva sua morada completa (Província, Município, Bairro...)"
-                                    value={currentAddress}
-                                    onChange={e => setCurrentAddress(e.target.value)}
-                                />
-                            </Card>
-                        )}
 
                         <div className="space-y-4">
                             {items.map((it: any) => (
                                 <div key={it.id} className="bg-white p-5 rounded-3xl border flex items-center gap-4 shadow-sm">
                                     <img src={optimizeImg(it.image)} className="w-16 h-16 object-contain rounded-xl bg-gray-50 p-2" loading="lazy" alt={it.name} />
-                                    <div className="flex-1"><h4 className="font-bold text-gray-800 text-sm">{formatProductNameForCustomer(it.name)}</h4><p className="text-emerald-600 font-black">Kz {(it.price * it.quantity).toLocaleString()}</p></div>
+                                    <div className="flex-1">
+                                        <h4 className="font-bold text-gray-800 text-sm">{formatProductNameForCustomer(it.name)}</h4>
+                                        <p className="text-emerald-600 font-black">Kz {(it.price * it.quantity).toLocaleString()}</p>
+                                    </div>
                                     <div className="flex flex-col items-end gap-2">
                                         <button
                                             disabled={isProcessing}
@@ -510,38 +519,110 @@ export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAd
                         </div>
                     </div>
 
-                    <div className="bg-emerald-900 text-white p-8 rounded-[40px] shadow-2xl space-y-6 h-fit sticky top-24">
+                    <div className="bg-emerald-900 text-white p-8 rounded-[40px] shadow-2xl space-y-6 h-fit lg:sticky lg:top-24">
                         <h3 className="font-black text-xl border-b border-white/10 pb-4">Resumo da Compra</h3>
+
                         <div className="flex gap-2 p-1 bg-white/10 rounded-2xl">
-                            <button 
-                                onClick={() => setType('DELIVERY')} 
+                            <button
+                                onClick={() => setType('DELIVERY')}
                                 disabled={!pharm?.deliveryActive}
                                 className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${!pharm?.deliveryActive ? 'opacity-30 cursor-not-allowed' : (type === 'DELIVERY' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent')}`}
                             >
-                                Entrega
+                                Receber em Casa
                             </button>
-                            <button onClick={() => setType('PICKUP')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${type === 'PICKUP' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent'}`}>Levantamento</button>
+                            <button
+                                onClick={() => setType('PICKUP')}
+                                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${type === 'PICKUP' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent'}`}
+                            >
+                                Levantar na Farmacia
+                            </button>
                         </div>
-                        
+
+                        <p className="text-[10px] text-emerald-200 font-bold uppercase tracking-wide">
+                            {type === 'DELIVERY'
+                                ? 'Entrega ao domicilio selecionada. Informe a localizacao abaixo.'
+                                : 'Levantamento em loja selecionado. Nao precisa adicionar morada.'}
+                        </p>
+
+                        {type === 'DELIVERY' && (
+                            <div className="bg-white/10 p-4 rounded-2xl border border-white/15 space-y-3">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h4 className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2">
+                                        <MapPin size={14} className="text-emerald-300" /> Local de Entrega
+                                    </h4>
+                                    <button
+                                        onClick={handleUseGps}
+                                        disabled={isLocating}
+                                        className="text-[10px] font-black text-blue-50 uppercase flex items-center gap-1 bg-blue-600/80 px-3 py-2 rounded-xl hover:bg-blue-500 transition-all"
+                                    >
+                                        {isLocating ? <Loader2 className="animate-spin" size={12} /> : <Navigation size={12} />}
+                                        {isLocating ? 'Obtendo...' : 'Usar GPS'}
+                                    </button>
+                                </div>
+
+                                <textarea
+                                    className="w-full p-3 bg-white text-gray-800 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-200 font-semibold text-xs transition-all min-h-[92px]"
+                                    placeholder="Ex: Provincia, Municipio, Bairro, rua e ponto de referencia"
+                                    value={currentAddress}
+                                    onChange={e => setCurrentAddress(e.target.value)}
+                                />
+
+                                {addressError && (
+                                    <div className="bg-amber-500/20 border border-amber-400/40 rounded-xl px-3 py-2 text-[10px] font-black text-amber-100 uppercase tracking-wide">
+                                        {addressError}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {type === 'PICKUP' && (
+                            <div className="bg-blue-500/15 p-4 rounded-2xl border border-blue-400/30">
+                                <p className="text-[10px] font-black text-blue-100 uppercase tracking-wide">
+                                    Levantar em: {pharm?.address || 'Morada da farmacia indisponivel'}
+                                </p>
+                                {pharm?.phone && (
+                                    <p className="text-[10px] font-bold text-blue-200 mt-1 uppercase tracking-wide">
+                                        Contacto: {pharm.phone}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
                         {!pharm?.deliveryActive && (
                             <div className="bg-orange-500/20 p-4 rounded-2xl border border-orange-500/30 flex items-start gap-3">
                                 <AlertCircle size={18} className="text-orange-400 shrink-0 mt-0.5" />
-                                <p className="text-[10px] font-bold text-orange-200 leading-tight">Esta farmácia desativou temporariamente o serviço de entregas. Por favor, levante o seu pedido na loja.</p>
+                                <p className="text-[10px] font-bold text-orange-200 leading-tight">
+                                    Esta farmacia desativou temporariamente o servico de entregas. Por favor, levante o seu pedido na loja.
+                                </p>
                             </div>
                         )}
 
                         <div className="space-y-2 pt-4">
-                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold"><span>Medicamentos ({items.length})</span><span>Kz {sub.toLocaleString()}</span></div>
-                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold"><span>Taxa de Entrega</span><span>Kz {fee.toLocaleString()}</span></div>
-                            <div className="flex justify-between items-center pt-6 text-3xl font-black border-t border-white/10"><span>Total</span><span>Kz {total.toLocaleString()}</span></div>
+                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold">
+                                <span>Medicamentos ({items.length})</span>
+                                <span>Kz {sub.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold">
+                                <span>{type === 'DELIVERY' ? 'Taxa de Entrega' : 'Levantamento na Farmacia'}</span>
+                                <span>{type === 'DELIVERY' ? `Kz ${fee.toLocaleString()}` : 'Gratis'}</span>
+                            </div>
+                            <div className="flex justify-between items-center pt-6 text-3xl font-black border-t border-white/10">
+                                <span>Total</span>
+                                <span>Kz {total.toLocaleString()}</span>
+                            </div>
                         </div>
-                        <Button onClick={handleConfirmCheckout} disabled={isProcessing || (type === 'DELIVERY' && !currentAddress)} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 rounded-[24px] font-black text-xl shadow-2xl shadow-emerald-500/20 active:scale-95 transition-all">
-                            {isProcessing ? <Loader2 className="animate-spin" /> : "Confirmar Pedido"}
+
+                        <Button onClick={handleConfirmCheckout} disabled={isProcessing} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 rounded-[24px] font-black text-xl shadow-2xl shadow-emerald-500/20 active:scale-95 transition-all">
+                            {isProcessing ? <Loader2 className="animate-spin" /> : (deliveryMissingAddress ? 'Adicionar Localizacao' : 'Confirmar Pedido')}
                         </Button>
-                        <p className="text-[9px] text-center text-emerald-400 font-bold uppercase tracking-widest opacity-60">Pagamento no ato da entrega</p>
+
+                        <p className="text-[9px] text-center text-emerald-400 font-bold uppercase tracking-widest opacity-60">
+                            {type === 'DELIVERY' ? 'Pagamento no ato da entrega' : 'Pagamento no ato do levantamento'}
+                        </p>
                     </div>
                 </div>
             )}
         </div>
     );
 };
+
