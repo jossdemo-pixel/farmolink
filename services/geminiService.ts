@@ -159,6 +159,74 @@ export interface FarmoBotMessageResult {
   triggers?: string[];
 }
 
+const EDGE_RETRYABLE_MESSAGES = [
+  'failed to send a request to the edge function',
+  'edge function returned a non-2xx status code',
+  'network',
+  'fetch',
+  'timeout',
+];
+
+const isRetryableEdgeError = (error: any): boolean => {
+  const rawMessage = String(error?.message || error?.name || '').toLowerCase();
+  if (!rawMessage) return false;
+  return EDGE_RETRYABLE_MESSAGES.some((token) => rawMessage.includes(token));
+};
+
+const invokeGeminiWithRetry = async (
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+  attempts = 2,
+) => {
+  let lastData: any = null;
+  let lastError: any = null;
+
+  for (let i = 0; i < attempts; i += 1) {
+    const { data, error } = await supabase.functions.invoke('gemini', { body, headers });
+    lastData = data;
+    lastError = error;
+
+    if (!error) return { data, error: null };
+    if (!isRetryableEdgeError(error) || i === attempts - 1) break;
+
+    await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
+  }
+
+  return { data: lastData, error: lastError };
+};
+
+const buildLocalFallbackResult = (message: string, productsContext: any[]): FarmoBotMessageResult => {
+  const normalized = normalizeText(message);
+  const hasCatalogIntent = /\b(tem|disponivel|stock|preco|valor|custa|farmacia|farmacias|reservar|comprar|carrinho)\b/.test(normalized);
+  const contextItems = Array.isArray(productsContext) ? productsContext.slice(0, 3) : [];
+
+  if (hasCatalogIntent && contextItems.length > 0) {
+    const summary = contextItems
+      .map((item: any) => `${item.name} (Kz ${Number(item.price || 0)} - ${item.pharmacyName || 'Farmacia'})`)
+      .join('; ');
+
+    return {
+      text: `Ola. Estou com instabilidade na consulta em tempo real. Com base no catalogo local, encontrei: ${summary}. Quer abrir a lista de farmacias para confirmar disponibilidade agora?`,
+      actions: [{ type: 'OPEN_PHARMACIES_NEARBY' }],
+      conversationStatus: 'bot_active',
+      mode: 'NAVIGATION',
+      riskLevel: 'LOW',
+      escalationTarget: 'BOT',
+      triggers: [],
+    };
+  }
+
+  return {
+    text: 'Ola. Estou com instabilidade temporaria no FarmoBot. Posso seguir com navegacao segura: enviar receita, ver farmacias ou abrir carrinho.',
+    actions: [{ type: 'OPEN_UPLOAD_RX' }, { type: 'OPEN_PHARMACIES_NEARBY' }, { type: 'OPEN_CART' }],
+    conversationStatus: 'bot_active',
+    mode: 'NAVIGATION',
+    riskLevel: 'LOW',
+    escalationTarget: 'BOT',
+    triggers: [],
+  };
+};
+
 const BOT_ACTION_ALIASES: Record<string, string> = {
   upload_prescription: 'OPEN_UPLOAD_RX',
   reserve_product: 'ADD_TO_CART',
@@ -280,19 +348,25 @@ export const getChatSession = () => {
       pharmacyId?: string;
       forceNewConversation?: boolean;
     }): Promise<FarmoBotMessageResult> => {
+      let productsContext: any[] = [];
       try {
         if (!message?.trim()) {
           return { text: 'Por favor, escreva uma mensagem.', actions: [] };
         }
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
-
-        const [sessionResult, productsContext] = await Promise.all([
+        const [sessionResult, productsContextResult] = await Promise.all([
           supabase.auth.getSession(),
           shouldBuildProductsContext(message) ? buildProductsContext(message) : Promise.resolve([]),
         ]);
-        const token = sessionResult.data.session?.access_token;
+        productsContext = productsContextResult;
+
+        let token = sessionResult.data.session?.access_token;
+        if (!token) {
+          const refreshResult = await supabase.auth.refreshSession();
+          token = refreshResult.data.session?.access_token || token;
+        }
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+        const localFallback = buildLocalFallbackResult(message, productsContext);
 
         const structuredPayload = {
           action: 'farmobot_message',
@@ -306,15 +380,12 @@ export const getChatSession = () => {
           productsContext,
         };
 
-        let { data, error } = await supabase.functions.invoke('gemini', {
-          body: structuredPayload,
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
+        let { data, error } = await invokeGeminiWithRetry(structuredPayload, headers, 2);
 
         // Fallback for older edge implementation.
         if (error || data?.error) {
-          const legacy = await supabase.functions.invoke('gemini', {
-            body: {
+          const legacy = await invokeGeminiWithRetry(
+            {
               action: 'chat',
               message,
               userName,
@@ -325,23 +396,22 @@ export const getChatSession = () => {
                 pharmacyName: p.pharmacyName,
               })),
             },
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          });
+            headers,
+            2,
+          );
           data = legacy.data;
           error = legacy.error;
         }
 
-        clearTimeout(timeoutId);
-
         if (error) {
           console.error('Erro na Edge Function:', error);
-          if (error.message?.includes('timeout')) {
-            throw new Error('Resposta demorou muito. Por favor, tente novamente.');
-          }
-          throw new Error(error.message || 'Erro ao processar sua mensagem');
+          return localFallback;
         }
 
-        if (data?.error) throw new Error(data.details || data.error);
+        if (data?.error) {
+          console.error('Erro no payload da Edge Function:', data);
+          return localFallback;
+        }
 
         const reply = data?.reply || undefined;
         const actions = parseActions(data?.actions);
@@ -363,18 +433,7 @@ export const getChatSession = () => {
         };
       } catch (error: any) {
         console.error('Falha no Chat:', error.message);
-
-        if (error.name === 'AbortError') {
-          return {
-            text: 'Tempo limite excedido. Sua conexao esta lenta. Tente novamente mais tarde.',
-            actions: [],
-          };
-        }
-
-        return {
-          text: `Erro: ${error.message}. Por favor, verifique sua conexao.`,
-          actions: [],
-        };
+        return buildLocalFallbackResult(message, productsContext);
       }
     },
   };
