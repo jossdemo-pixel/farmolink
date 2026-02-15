@@ -16,6 +16,8 @@ import { getCurrentPosition, calculateDistance } from './services/locationServic
 import { Wifi, WifiOff, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
 import { SUPABASE_URL } from './services/supabaseClient';
+import { BotActionEvent } from './services/geminiService';
+import { executeBotAction } from './services/botActionRouter';
 
 // --- Static View Imports ---
 import { HomeView, AllPharmaciesView, CartView, PharmacyProfileView } from './views/CustomerShop'; // NOVA VIEW
@@ -522,6 +524,19 @@ export const App: React.FC = () => {
         });
     };
 
+    const handleBotAction = useCallback((action: BotActionEvent) => {
+        executeBotAction(action, {
+            navigate: (nextPage) => setPage(nextPage),
+            addToCart: handleAddToCart,
+            setActivePharmacyId: (id) => setActivePharmacyId(id),
+            products,
+            notify: (message) => {
+                setSyncNotice(message);
+                setTimeout(() => setSyncNotice(null), 3500);
+            }
+        });
+    }, [products, handleAddToCart]);
+
     const updateCartQuantity = (id: string, delta: number) => {
         setCart(prev => {
             const updated = prev.map(item => {
@@ -774,7 +789,9 @@ export const App: React.FC = () => {
                     menuItems={getMenuItems()} cartCount={cart.reduce((a, b) => a + b.quantity, 0)}
                 >
                     {renderContent()}
-                    {user.role === UserRole.CUSTOMER && <ChatBot />}
+                    {user.role === UserRole.CUSTOMER && (
+                        <ChatBot onAction={handleBotAction} preferredPharmacyId={activePharmacyId} />
+                    )}
                 </MainLayout>
             ) : (
                 renderContent()
