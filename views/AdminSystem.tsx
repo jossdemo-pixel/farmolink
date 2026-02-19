@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Card, Button, Toast, Badge } from '../components/UI';
+import { Card, Button, Toast, Badge, NumericInput } from '../components/UI';
 import { generateFullSystemBackup, restoreFullSystemBackup, sendSystemNotification, RestoreOptions, fetchAllAdminBanners, saveAllAdminBanners, saveAdminBanner, deleteAdminBanner, fetchAdminFaq, saveAdminFaq, fetchAdminAbout, saveAdminAbout, fetchAllCarouselSlides, saveAllCarouselSlides, saveCarouselSlide, fetchLegalContent, saveLegalContent, DEFAULT_PRIVACY_POLICY_TEXT, DEFAULT_TERMS_OF_USE_TEXT, DEFAULT_LEGAL_UPDATED_AT } from '../services/dataService';
 import { 
     Settings, Save, Megaphone, ShieldCheck, Download, 
@@ -223,8 +223,30 @@ export const AdminSettingsView = () => {
                     <Card title="Parâmetros de Rede" className="p-6">
                         <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
-                                <div><label className="text-[10px] font-black text-gray-400 uppercase">Taxa (%)</label><input type="number" className="w-full p-3 border rounded-xl" value={config.commissionRate} onChange={e => setConfig({...config, commissionRate: Number(e.target.value)})}/></div>
-                                <div><label className="text-[10px] font-black text-gray-400 uppercase">Min. (Kz)</label><input type="number" className="w-full p-3 border rounded-xl" value={config.minOrderValue} onChange={e => setConfig({...config, minOrderValue: Number(e.target.value)})}/></div>
+                                <div>
+                                    <label className="text-[10px] font-black text-gray-400 uppercase">Taxa (%)</label>
+                                    <NumericInput
+                                        className="w-full p-3 border rounded-xl"
+                                        value={config.commissionRate}
+                                        onValueChange={value => {
+                                            if (typeof value === 'number') {
+                                                setConfig({ ...config, commissionRate: value });
+                                            }
+                                        }}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-black text-gray-400 uppercase">Min. (Kz)</label>
+                                    <NumericInput
+                                        className="w-full p-3 border rounded-xl"
+                                        value={config.minOrderValue}
+                                        onValueChange={value => {
+                                            if (typeof value === 'number') {
+                                                setConfig({ ...config, minOrderValue: value });
+                                            }
+                                        }}
+                                    />
+                                </div>
                             </div>
                             <div><label className="text-[10px] font-black text-gray-400 uppercase">WhatsApp</label><input type="text" className="w-full p-3 border rounded-xl" value={config.supportWhatsapp} onChange={e => setConfig({...config, supportWhatsapp: e.target.value})}/></div>
                             <div><label className="text-[10px] font-black text-gray-400 uppercase">Email</label><input type="email" className="w-full p-3 border rounded-xl" value={config.supportEmail} onChange={e => setConfig({...config, supportEmail: e.target.value})}/></div>
@@ -367,15 +389,17 @@ export const AdminSettingsView = () => {
                             <div className="space-y-3">
                                 <div>
                                     <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block">Ordem de Exibição</label>
-                                    <input 
-                                        type="number"
-                                        value={slide.order || idx + 1} 
-                                        onChange={e => {
-                                            const newSlides = slidesData.map((s: any) => s.id === slide.id ? {...s, order: parseInt(e.target.value)} : s);
-                                            setSlidesData(newSlides);
-                                        }}
+                                    <NumericInput
+                                        value={slide.order || idx + 1}
+                                        integer
                                         className="w-full p-3 border rounded-xl font-bold text-lg"
                                         placeholder="Ex: 1, 2, 3..."
+                                        onValueChange={value => {
+                                            if (typeof value === 'number') {
+                                                const newSlides = slidesData.map((s: any) => s.id === slide.id ? { ...s, order: value } : s);
+                                                setSlidesData(newSlides);
+                                            }
+                                        }}
                                     />
                                 </div>
                                 <div>

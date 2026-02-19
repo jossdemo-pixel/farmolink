@@ -102,6 +102,114 @@ export const PasswordInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>
   );
 };
 
+type NumericInputValue = number | '' | null | undefined;
+type NumericInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' | 'onChange'> & {
+  value: NumericInputValue;
+  onValueChange?: (value: number | '') => void;
+  allowEmpty?: boolean;
+  integer?: boolean;
+};
+
+const normalizeNumericInputValue = (value: NumericInputValue): string => {
+  if (value === '' || value === null || typeof value === 'undefined') return '';
+  return String(value);
+};
+
+const parseNumericBound = (value: string | number | undefined): number | undefined => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+export const NumericInput: React.FC<NumericInputProps> = ({
+  value,
+  onValueChange,
+  allowEmpty = false,
+  integer = false,
+  min,
+  max,
+  onBlur,
+  onFocus,
+  ...props
+}) => {
+  const [draft, setDraft] = useState<string>(normalizeNumericInputValue(value));
+  const [isFocused, setIsFocused] = useState(false);
+  const minValue = parseNumericBound(min);
+  const maxValue = parseNumericBound(max);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setDraft(normalizeNumericInputValue(value));
+    }
+  }, [value, isFocused]);
+
+  const clampValue = (raw: number) => {
+    let next = integer ? Math.trunc(raw) : raw;
+    if (typeof minValue === 'number') next = Math.max(minValue, next);
+    if (typeof maxValue === 'number') next = Math.min(maxValue, next);
+    return next;
+  };
+
+  const parseRaw = (raw: string): number | '' => {
+    if (raw === '') return '';
+    const parsed = Number(raw.replace(',', '.'));
+    if (!Number.isFinite(parsed)) return '';
+    return clampValue(parsed);
+  };
+
+  const commitDraft = (raw: string) => {
+    const parsed = parseRaw(raw);
+    if (parsed === '') {
+      if (allowEmpty) {
+        setDraft('');
+        onValueChange?.('');
+        return;
+      }
+      const currentParsed = parseRaw(normalizeNumericInputValue(value));
+      const fallback = currentParsed === '' ? (typeof minValue === 'number' ? minValue : 0) : currentParsed;
+      setDraft(String(fallback));
+      onValueChange?.(fallback);
+      return;
+    }
+
+    setDraft(String(parsed));
+    onValueChange?.(parsed);
+  };
+
+  return (
+    <input
+      {...props}
+      type="number"
+      min={min}
+      max={max}
+      value={draft}
+      onFocus={(e) => {
+        setIsFocused(true);
+        e.currentTarget.select();
+        onFocus?.(e);
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        const parsed = parseRaw(raw);
+        if (parsed !== '') {
+          onValueChange?.(parsed);
+        } else if (raw === '' && allowEmpty) {
+          onValueChange?.('');
+        }
+      }}
+      onBlur={(e) => {
+        setIsFocused(false);
+        commitDraft(e.target.value);
+        onBlur?.(e);
+      }}
+    />
+  );
+};
+
 export const Toast = ({ message, type, onClose }: { message: string, type: 'success' | 'error' | 'info', onClose: () => void }) => {
     useEffect(() => {
         const timer = setTimeout(onClose, 5000);

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Badge, Toast, Button } from '../components/UI';
+import { Card, Badge, Toast, Button, NumericInput } from '../components/UI';
 import { Pharmacy, User, UserRole } from '../types';
 import { supabase } from '../services/supabaseClient';
 import { 
@@ -330,7 +330,18 @@ export const AdminPharmacyManagement = () => {
 
                             <div className="grid md:grid-cols-2 gap-4">
                                 <div><label className="text-[10px] font-black uppercase text-gray-400 mb-1 block">Nome Comercial</label><input className="w-full p-4 bg-gray-50 border rounded-2xl outline-none font-bold" value={editing.name} onChange={e => setEditing({...editing, name: e.target.value})}/></div>
-                                <div><label className="text-[10px] font-black uppercase text-gray-400 mb-1 block">Comissão (%)</label><input type="number" className="w-full p-4 bg-gray-50 border rounded-2xl outline-none font-bold" value={editing.commissionRate || 10} onChange={e => setEditing({...editing, commissionRate: Number(e.target.value)})}/></div>
+                                <div>
+                                    <label className="text-[10px] font-black uppercase text-gray-400 mb-1 block">Comissão (%)</label>
+                                    <NumericInput
+                                        className="w-full p-4 bg-gray-50 border rounded-2xl outline-none font-bold"
+                                        value={editing.commissionRate ?? 10}
+                                        onValueChange={value => {
+                                            if (typeof value === 'number') {
+                                                setEditing({ ...editing, commissionRate: value });
+                                            }
+                                        }}
+                                    />
+                                </div>
                             </div>
                         </div>
 

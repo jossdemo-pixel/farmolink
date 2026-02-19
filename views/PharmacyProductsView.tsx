@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Card, Badge, Button, Toast } from '../components/UI';
+import { Card, Badge, Button, Toast, NumericInput } from '../components/UI';
 import { Product, PRODUCT_CATEGORIES, GlobalProduct, ProductUnitType, UNIT_TYPES } from '../types';
 import { 
     Plus, XCircle, Edit2, Trash2, Search, Save, AlertTriangle, FileText, UploadCloud, 
@@ -145,7 +145,15 @@ const BulkImportModal = ({ onClose, onComplete, pharmacyId, existingStock }: { o
                                                     {item.isDuplicate && <p className="text-[8px] font-black text-orange-500 uppercase mt-0.5 flex items-center gap-1"><AlertOctagon size={10}/> Este produto já existe no seu inventário</p>}
                                                 </div>
                                                 <div className="w-24 bg-gray-50 rounded-lg p-1">
-                                                    <input type="number" className="w-full bg-transparent text-center font-black text-emerald-600 outline-none text-xs" value={item.price} onChange={e => setItems(items.map(i => i.id === item.id ? {...i, price: Number(e.target.value)} : i))}/>
+                                                    <NumericInput
+                                                        className="w-full bg-transparent text-center font-black text-emerald-600 outline-none text-xs"
+                                                        value={item.price}
+                                                        onValueChange={value => {
+                                                            if (typeof value === 'number') {
+                                                                setItems(items.map(i => i.id === item.id ? { ...i, price: value } : i));
+                                                            }
+                                                        }}
+                                                    />
                                                 </div>
                                                 <button onClick={() => setItems(items.filter(i => i.id !== item.id))} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16}/></button>
                                             </div>
@@ -414,8 +422,31 @@ export const PharmacyProductsView = ({ pharmacyId, onRefresh }: { pharmacyId: st
                             )}
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                            <div><label className="label-text">Preço (Kz)</label><input type="number" className="input-field font-black" value={formData.price} onChange={e => setFormData({...formData, price: Number(e.target.value)})} /></div>
-                            <div><label className="label-text">Stock</label><input type="number" className="input-field" value={formData.stock} onChange={e => setFormData({...formData, stock: Number(e.target.value)})} /></div>
+                            <div>
+                                <label className="label-text">Preço (Kz)</label>
+                                <NumericInput
+                                    className="input-field font-black"
+                                    value={formData.price}
+                                    onValueChange={value => {
+                                        if (typeof value === 'number') {
+                                            setFormData({ ...formData, price: value });
+                                        }
+                                    }}
+                                />
+                            </div>
+                            <div>
+                                <label className="label-text">Stock</label>
+                                <NumericInput
+                                    className="input-field"
+                                    value={formData.stock}
+                                    integer
+                                    onValueChange={value => {
+                                        if (typeof value === 'number') {
+                                            setFormData({ ...formData, stock: value });
+                                        }
+                                    }}
+                                />
+                            </div>
                         </div>
                         <div className="flex gap-4 pt-4"><Button type="button" variant="outline" className="flex-1 py-4" onClick={() => setShowManualForm(false)}>Cancelar</Button><Button type="submit" disabled={loading} className="flex-[2] py-4 bg-emerald-600 text-white font-black uppercase">Gravar</Button></div>
                     </form>

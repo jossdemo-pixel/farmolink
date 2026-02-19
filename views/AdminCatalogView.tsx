@@ -1,7 +1,7 @@
 
 import { Search, Plus, Save, Database, Trash2, Edit2, UploadCloud, X, CheckCircle2, Loader2, AlertTriangle, ArrowUp, ArrowDown, ChevronDown, RefreshCw, Wifi, WifiOff, AlertOctagon } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Button, Badge, Toast } from '../components/UI';
+import { Card, Button, Badge, Toast, NumericInput } from '../components/UI';
 import { GlobalProduct, PRODUCT_CATEGORIES } from '../types';
 import { fetchGlobalCatalog, addGlobalProduct, updateGlobalProduct, bulkAddGlobalProducts, deleteGlobalProduct, clearCatalogCache, areProductNamesSimilar } from '../services/productService';
 import { playSound } from '../services/soundService';
@@ -258,7 +258,15 @@ export const AdminCatalogView = () => {
                                                             {it.isDuplicate && <p className="text-[8px] font-black text-orange-500 uppercase mt-1 flex items-center gap-1"><AlertOctagon size={10}/> Já existe no Catálogo Mestre</p>}
                                                         </td>
                                                         <td className="p-4 text-right">
-                                                            <input type="number" className="w-24 bg-emerald-50 p-2 rounded-xl text-right font-black text-emerald-600 text-xs" value={it.price} onChange={e => setProcessedItems(processedItems.map((pi, i) => i === idx ? {...pi, price: Number(e.target.value)} : pi))}/>
+                                                            <NumericInput
+                                                                className="w-24 bg-emerald-50 p-2 rounded-xl text-right font-black text-emerald-600 text-xs"
+                                                                value={it.price}
+                                                                onValueChange={value => {
+                                                                    if (typeof value === 'number') {
+                                                                        setProcessedItems(processedItems.map((pi, i) => i === idx ? { ...pi, price: value } : pi));
+                                                                    }
+                                                                }}
+                                                            />
                                                         </td>
                                                         <td className="p-4 text-right">
                                                             <button onClick={() => setProcessedItems(processedItems.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
@@ -320,12 +328,15 @@ export const AdminCatalogView = () => {
                                 </div>
                                 <div>
                                     <label className="text-[10px] font-black text-gray-400 uppercase mb-2 block">Preço de Referência (Kz)</label>
-                                    <input 
-                                        type="number"
+                                    <NumericInput
                                         placeholder="0"
                                         className="w-full p-4 bg-gray-50 border rounded-2xl outline-none font-bold text-gray-800 focus:ring-2 focus:ring-blue-500"
                                         value={fields.referencePrice}
-                                        onChange={e => setFields({...fields, referencePrice: Number(e.target.value)})}
+                                        onValueChange={value => {
+                                            if (typeof value === 'number') {
+                                                setFields({ ...fields, referencePrice: value });
+                                            }
+                                        }}
                                     />
                                 </div>
                             </div>

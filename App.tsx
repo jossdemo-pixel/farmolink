@@ -4,7 +4,7 @@ import { User, UserRole, Product, Pharmacy, Order, OrderStatus, PrescriptionRequ
 import { MainLayout } from './components/Layout';
 import { AuthView, UpdatePasswordView } from './components/Auth';
 import { LandingPage } from './components/LandingPage';
-import { LoadingOverlay } from './components/UI';
+import { LoadingOverlay, Toast, NumericInput } from './components/UI';
 import { ChatBot } from './components/ChatBot';
 import { getCurrentUser, signOutUser } from './services/authService';
 import { fetchPharmacies } from './services/pharmacyService';
@@ -44,6 +44,11 @@ type ConnectivityNoticeState = {
     message: string;
 };
 
+type AddToCartOptions = {
+    quantity?: number;
+    askQuantity?: boolean;
+};
+
 export const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
     const [page, setPage] = useState('home');
@@ -66,6 +71,9 @@ export const App: React.FC = () => {
     const [cart, setCart] = useState<CartItem[]>([]);
     const [activePharmacyId, setActivePharmacyId] = useState<string | null>(null);
     const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
+    const [pendingCartProduct, setPendingCartProduct] = useState<Product | null>(null);
+    const [pendingCartQuantity, setPendingCartQuantity] = useState<number>(1);
+    const [uxToast, setUxToast] = useState<{ msg: string; type: 'success' | 'info' } | null>(null);
 
     const isPasswordRecoveryFlow = useCallback(() => {
         try {
@@ -339,6 +347,10 @@ export const App: React.FC = () => {
         }).sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
     }, []);
 
+    const showUxToast = (msg: string, type: 'success' | 'info' = 'info') => {
+        setUxToast({ msg, type });
+    };
+
     const loadData = useCallback(async (currUser: User) => {
         try {
             // 1) Tenta usar cache local para exibir algo mesmo em rede fraca
@@ -501,32 +513,89 @@ export const App: React.FC = () => {
         }
     }, [user]);
 
-    const handleAddToCart = (product: Product) => {
-        // Validação básica de stock local (sem chamadas extras ao servidor)
+    const addToCartDirect = (product: Product, quantity: number = 1) => {
+        const maxStock = typeof product.stock === 'number' ? product.stock : Infinity;
+        if (!maxStock || maxStock <= 0) {
+            alert("Este produto está sem stock disponível no momento.");
+            return false;
+        }
+
+        const safeQuantity = Math.max(1, Math.floor(Number(quantity) || 1));
+        if (safeQuantity > maxStock) {
+            alert(`Stock insuficiente para ${product.name}. Disponível: ${maxStock} unidade(s).`);
+            return false;
+        }
+
+        const shouldResetCart = !!(activePharmacyId && activePharmacyId !== product.pharmacyId);
+        if (shouldResetCart && !confirm("Esvaziar carrinho da outra farmácia?")) return false;
+
+        const baselineCart = shouldResetCart ? [] : cart;
+        const baselineExisting = baselineCart.find(item => item.id === product.id);
+        if (baselineExisting && (baselineExisting.quantity + safeQuantity) > maxStock) {
+            alert(`Stock insuficiente para ${product.name}. Disponível: ${maxStock} unidade(s).`);
+            return false;
+        }
+
+        setActivePharmacyId(product.pharmacyId);
+        setCart(prev => {
+            const cartToUse = shouldResetCart ? [] : prev;
+            const existing = cartToUse.find(item => item.id === product.id);
+            if (existing) {
+                return cartToUse.map(item => item.id === product.id ? { ...item, quantity: item.quantity + safeQuantity } : item);
+            }
+            return [...cartToUse, { ...product, quantity: safeQuantity }];
+        });
+
+        playSound('success');
+        showUxToast(`${product.name} adicionado ao carrinho (${safeQuantity}).`, 'success');
+        return true;
+    };
+
+    const openAddToCartModal = (product: Product, initialQuantity: number = 1) => {
         const maxStock = typeof product.stock === 'number' ? product.stock : Infinity;
         if (!maxStock || maxStock <= 0) {
             alert("Este produto está sem stock disponível no momento.");
             return;
         }
 
-        if (activePharmacyId && activePharmacyId !== product.pharmacyId) {
-            if (!confirm("Esvaziar carrinho da outra farmácia?")) return;
-            setCart([]);
+        const safeInitialQuantity = Math.max(1, Math.floor(Number(initialQuantity) || 1));
+        const clampedInitial = maxStock === Infinity
+            ? safeInitialQuantity
+            : Math.min(safeInitialQuantity, maxStock);
+
+        setPendingCartProduct(product);
+        setPendingCartQuantity(clampedInitial);
+        playSound('click');
+        showUxToast(`Produto selecionado: ${product.name}`, 'info');
+    };
+
+    const closeAddToCartModal = () => {
+        setPendingCartProduct(null);
+        setPendingCartQuantity(1);
+    };
+
+    const confirmAddToCartFromModal = () => {
+        if (!pendingCartProduct) return;
+        const maxStock = typeof pendingCartProduct.stock === 'number' ? pendingCartProduct.stock : Infinity;
+        const safeQuantity = Math.max(1, Math.floor(Number(pendingCartQuantity) || 1));
+
+        if (maxStock !== Infinity && safeQuantity > maxStock) {
+            alert(`Stock insuficiente para ${pendingCartProduct.name}. Disponível: ${maxStock} unidade(s).`);
+            setPendingCartQuantity(maxStock);
+            return;
         }
-        setActivePharmacyId(product.pharmacyId);
-        setCart(prev => {
-            const existing = prev.find(item => item.id === product.id);
-            if (existing) {
-                const nextQty = existing.quantity + 1;
-                if (nextQty > maxStock) {
-                    alert(`Stock insuficiente para ${product.name}. Disponível: ${maxStock} unidade(s).`);
-                    return prev;
-                }
-                return prev.map(item => item.id === product.id ? { ...item, quantity: nextQty } : item);
-            }
-            playSound('click');
-            return [...prev, { ...product, quantity: 1 }];
-        });
+
+        addToCartDirect(pendingCartProduct, safeQuantity);
+        closeAddToCartModal();
+    };
+
+    const handleAddToCart = (product: Product, options: AddToCartOptions = {}) => {
+        const { quantity = 1, askQuantity = true } = options;
+        if (askQuantity) {
+            openAddToCartModal(product, quantity);
+            return;
+        }
+        addToCartDirect(product, quantity);
     };
 
     const updateCartQuantity = (id: string, delta: number) => {
@@ -590,6 +659,7 @@ export const App: React.FC = () => {
             });
             if (result.success) {
                 playSound('cash');
+                showUxToast('Venda confirmada com sucesso.', 'success');
                 setCart([]);
                 setPage('orders');
                 loadData(user);
@@ -730,6 +800,7 @@ export const App: React.FC = () => {
     return (
         <div className="min-h-screen bg-gray-100">
             {isAppLoading && <LoadingOverlay />}
+            {uxToast && <Toast message={uxToast.msg} type={uxToast.type} onClose={() => setUxToast(null)} />}
             
             {networkError && !isOffline && (
                 <div className="fixed top-0 left-0 right-0 z-[9999] animate-fade-in">
@@ -774,6 +845,100 @@ export const App: React.FC = () => {
                     <div className="bg-gray-900/90 backdrop-blur-md text-white px-6 py-2.5 rounded-full text-xs font-black shadow-2xl border border-white/10 flex items-center gap-2">
                         <AlertCircle size={14} className="text-emerald-400" />
                         Pressione novamente para sair
+                    </div>
+                </div>
+            )}
+
+            {pendingCartProduct && (
+                <div
+                    className="fixed inset-0 z-[10050] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Adicionar produto ao carrinho"
+                >
+                    <div className="w-full max-w-md bg-white rounded-[28px] border border-gray-100 shadow-2xl p-6 space-y-5">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.2em] mb-1">
+                                    Confirmar Produto
+                                </p>
+                                <h3 className="text-lg font-black text-gray-800 leading-tight">
+                                    {pendingCartProduct.name}
+                                </h3>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Stock disponivel: {pendingCartProduct.stock} unidade(s)
+                                </p>
+                            </div>
+                            <button
+                                onClick={closeAddToCartModal}
+                                className="w-9 h-9 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors"
+                                aria-label="Fechar"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                                Quantidade
+                            </label>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setPendingCartQuantity(prev => Math.max(1, prev - 1))}
+                                    className="w-11 h-11 rounded-2xl border border-gray-200 text-xl font-black text-gray-600 hover:bg-gray-50 transition-colors"
+                                >
+                                    -
+                                </button>
+                                <NumericInput
+                                    min={1}
+                                    max={pendingCartProduct.stock}
+                                    value={pendingCartQuantity}
+                                    integer
+                                    onValueChange={(next) => {
+                                        if (typeof next === 'number') {
+                                            setPendingCartQuantity(next);
+                                        }
+                                    }}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') confirmAddToCartFromModal();
+                                    }}
+                                    className="flex-1 h-11 rounded-2xl border border-gray-200 px-4 text-center font-black text-gray-700 outline-none focus:ring-2 focus:ring-emerald-100"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const maxStock = typeof pendingCartProduct.stock === 'number'
+                                            ? pendingCartProduct.stock
+                                            : Infinity;
+                                        setPendingCartQuantity(prev => {
+                                            const next = prev + 1;
+                                            return maxStock === Infinity ? next : Math.min(maxStock, next);
+                                        });
+                                    }}
+                                    className="w-11 h-11 rounded-2xl border border-gray-200 text-xl font-black text-gray-600 hover:bg-gray-50 transition-colors"
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 pt-1">
+                            <button
+                                type="button"
+                                onClick={closeAddToCartModal}
+                                className="flex-1 h-11 rounded-2xl border border-gray-200 text-gray-600 font-bold hover:bg-gray-50 transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                onClick={confirmAddToCartFromModal}
+                                className="flex-1 h-11 rounded-2xl bg-emerald-600 text-white font-black hover:bg-emerald-700 transition-colors"
+                            >
+                                Adicionar
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

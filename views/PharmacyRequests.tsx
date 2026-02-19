@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Badge, Button } from '../components/UI';
+import { Card, Badge, Button, NumericInput } from '../components/UI';
 import { PrescriptionRequest, QuotedItem, Product } from '../types';
 import { sendPrescriptionQuote, validatePrescriptionAI } from '../services/orderService';
 import { fetchPharmacyInventory } from '../services/productService';
@@ -59,7 +59,14 @@ export const PharmacyRequestsModule = ({ pharmacyId, requests: initialRequests, 
     const [imageFullscreen, setImageFullscreen] = useState(false);
     // Extende QuotedItem para incluir stock local para validação visual
     const [quoteItems, setQuoteItems] = useState<(QuotedItem & { currentStock?: number })[]>([]);
-    const [newItem, setNewItem] = useState({ name: '', qty: 1, price: '', unitType: 'Unidade', id: '', currentStock: 0 }); 
+    const [newItem, setNewItem] = useState<{ name: string; qty: number; price: number | ''; unitType: string; id: string; currentStock: number }>({
+        name: '',
+        qty: 1,
+        price: '',
+        unitType: 'Unidade',
+        id: '',
+        currentStock: 0
+    }); 
     const [isSending, setIsSending] = useState(false);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [myStock, setMyStock] = useState<Product[]>([]);
@@ -258,7 +265,7 @@ export const PharmacyRequestsModule = ({ pharmacyId, requests: initialRequests, 
     const selectFromStock = (product: Product) => {
         setNewItem({ 
             name: formatProductNameForCustomer(product.name), 
-            price: String(product.price), 
+            price: product.price, 
             qty: 1, 
             unitType: product.unitType || 'Unidade',
             id: product.id, // CAPTURA O ID REAL
@@ -431,19 +438,35 @@ export const PharmacyRequestsModule = ({ pharmacyId, requests: initialRequests, 
                                                 </div>
                                                 <div className="w-16">
                                                     <label className="text-[8px] font-black text-gray-400 uppercase mb-0.5 text-center block">Qtd</label>
-                                                    <input type="number" className="w-full p-2 bg-gray-50 border rounded-lg font-black text-center text-xs" value={it.quantity} onChange={e => {
-                                                        const updated = [...quoteItems]; 
-                                                        updated[idx].quantity = Number(e.target.value); 
-                                                        setQuoteItems(updated);
-                                                    }} />
+                                                    <NumericInput
+                                                        className="w-full p-2 bg-gray-50 border rounded-lg font-black text-center text-xs"
+                                                        value={it.quantity}
+                                                        integer
+                                                        min={1}
+                                                        onValueChange={value => {
+                                                            if (typeof value === 'number') {
+                                                                const updated = [...quoteItems];
+                                                                updated[idx].quantity = value;
+                                                                setQuoteItems(updated);
+                                                            }
+                                                        }}
+                                                    />
                                                 </div>
                                                 <div className="w-24">
                                                     <label className="text-[8px] font-black text-gray-400 uppercase mb-0.5 text-center block">Preço Unit.</label>
-                                                    <input type="number" className="w-full p-2 bg-emerald-50 border border-emerald-100 rounded-lg font-black text-center text-emerald-700 text-xs" placeholder="0" value={it.price} onChange={e => {
-                                                        const updated = [...quoteItems]; 
-                                                        updated[idx].price = Number(e.target.value); 
-                                                        setQuoteItems(updated);
-                                                    }} />
+                                                    <NumericInput
+                                                        className="w-full p-2 bg-emerald-50 border border-emerald-100 rounded-lg font-black text-center text-emerald-700 text-xs"
+                                                        placeholder="0"
+                                                        value={it.price}
+                                                        min={0}
+                                                        onValueChange={value => {
+                                                            if (typeof value === 'number') {
+                                                                const updated = [...quoteItems];
+                                                                updated[idx].price = value;
+                                                                setQuoteItems(updated);
+                                                            }
+                                                        }}
+                                                    />
                                                 </div>
                                                 <button onClick={() => setQuoteItems(quoteItems.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16}/></button>
                                             </div>
@@ -480,8 +503,26 @@ export const PharmacyRequestsModule = ({ pharmacyId, requests: initialRequests, 
                                                     </div>
                                                 )}
                                             </div>
-                                            <input type="number" className="w-16 py-3 px-1 bg-gray-50 rounded-xl outline-none font-black text-center text-sm" placeholder="Qtd" value={newItem.qty} onChange={e => setNewItem({...newItem, qty: Number(e.target.value)})} />
-                                            <input type="number" className="w-24 py-3 px-2 bg-gray-50 rounded-xl outline-none font-black text-center text-sm" placeholder="Preço" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} />
+                                            <NumericInput
+                                                className="w-16 py-3 px-1 bg-gray-50 rounded-xl outline-none font-black text-center text-sm"
+                                                placeholder="Qtd"
+                                                value={newItem.qty}
+                                                integer
+                                                min={1}
+                                                onValueChange={value => {
+                                                    if (typeof value === 'number') {
+                                                        setNewItem({ ...newItem, qty: value });
+                                                    }
+                                                }}
+                                            />
+                                            <NumericInput
+                                                className="w-24 py-3 px-2 bg-gray-50 rounded-xl outline-none font-black text-center text-sm"
+                                                placeholder="Preço"
+                                                value={newItem.price}
+                                                min={0}
+                                                allowEmpty
+                                                onValueChange={value => setNewItem({ ...newItem, price: value === '' ? '' : value })}
+                                            />
                                             <button onClick={addItemToQuote} className="p-3 bg-emerald-600 text-white rounded-xl shadow-lg"><Plus size={20}/></button>
                                         </div>
                                     </div>
