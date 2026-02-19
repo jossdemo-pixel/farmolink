@@ -584,7 +584,7 @@ export const App: React.FC = () => {
     const removeItemFromCart = (productId: string) => {
         setCart(prev => {
             const updated = prev.filter(item => item.id !== productId);
-            if (updated.length === 0) setActivePharmacyId(null);
+            if (updated.length === 0 && page !== 'pharmacy-detail') setActivePharmacyId(null);
             return updated;
         });
     };
@@ -635,7 +635,7 @@ export const App: React.FC = () => {
 
                 return { ...item, quantity: Math.max(0, nextQty) };
             }).filter(item => item.quantity > 0);
-            if (updated.length === 0) setActivePharmacyId(null);
+            if (updated.length === 0 && page !== 'pharmacy-detail') setActivePharmacyId(null);
             return updated;
         });
     };
