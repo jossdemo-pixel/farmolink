@@ -303,6 +303,14 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus): P
     return !error;
 };
 
+export const rejectOrderAndRestoreStock = async (
+    orderId: string
+): Promise<{ success: boolean; error?: string }> => {
+    const updated = await updateOrderStatus(orderId, OrderStatus.REJECTED);
+    if (!updated) return { success: false, error: 'Falha ao recusar pedido.' };
+    return { success: true };
+};
+
 export const fetchOrders = async (pharmacyId?: string, customerId?: string): Promise<Order[]> => {
     const res = await safeQuery(async () => {
         let query = supabase.from('orders').select('*');

@@ -4,12 +4,13 @@ import { Card, Badge, Button } from '../components/UI';
 import { Order, OrderStatus, Pharmacy } from '../types';
 import { 
     fetchOrders, updateOrderStatus, togglePharmacyAvailability, 
-    togglePharmacyDelivery, fetchPharmacyById, fetchPrescriptionRequests 
+    togglePharmacyDelivery, fetchPharmacyById, fetchPrescriptionRequests, rejectOrderAndRestoreStock
 } from '../services/dataService';
+import { fetchPharmacyInventory } from '../services/productService';
 import { supabase } from '../services/supabaseClient';
 import { 
     Clock, Package, Star, RefreshCw, Truck, Search, 
-    CheckCircle2, Loader2, Bell, Check, X, Phone, BrainCircuit, MapPin, ChevronDown, ChevronUp
+    CheckCircle2, Loader2, Bell, Check, X, Phone, BrainCircuit, MapPin, ChevronDown, ChevronUp, AlertTriangle
 } from 'lucide-react';
 import { playSound } from '../services/soundService';
 
@@ -178,11 +179,19 @@ export const PharmacyOverview = ({ stats, pharmacyId, onRefresh, setView }: any)
     );
 };
 
-export const PharmacyOrdersModule = ({ pharmacyId, onUpdate }: { pharmacyId: string, onUpdate: () => void }) => {
+type StockFollowup = {
+    title: string;
+    details: string[];
+    critical: boolean;
+};
+
+export const PharmacyOrdersModule = ({ pharmacyId, onUpdate, onGoToStock }: { pharmacyId: string, onUpdate: () => void, onGoToStock?: () => void }) => {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'PENDING' | 'HISTORY'>('PENDING');
     const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+    const [stockFollowup, setStockFollowup] = useState<StockFollowup | null>(null);
+    const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
 
     const load = async () => { 
         if (!pharmacyId) return;
@@ -200,10 +209,60 @@ export const PharmacyOrdersModule = ({ pharmacyId, onUpdate }: { pharmacyId: str
         return () => { supabase.removeChannel(sub); };
     }, [pharmacyId]);
 
-    const handleAction = async (orderId: string, next: OrderStatus) => {
-        if(await updateOrderStatus(orderId, next)) {
-            playSound('success'); load(); onUpdate();
+    const evaluateStockFollowup = async (order: Order, actionLabel: 'ACEITAR' | 'RECUSAR') => {
+        const inventory = await fetchPharmacyInventory(pharmacyId, true);
+        const byId = new Map(inventory.map(p => [p.id, p]));
+        const details: string[] = [];
+        let critical = false;
+
+        for (const item of (order.items || [])) {
+            const mapped = byId.get(item.id);
+            if (!mapped) continue;
+            if (mapped.stock <= 0) {
+                critical = true;
+                details.push(`${mapped.name}: stock esgotado (${mapped.stock})`);
+            } else if (mapped.stock <= 5) {
+                details.push(`${mapped.name}: stock baixo (${mapped.stock})`);
+            }
         }
+
+        if (actionLabel === 'RECUSAR') {
+            details.unshift('Pedido recusado: o stock foi reposto automaticamente para itens vinculados.');
+        } else {
+            details.unshift('Pedido aceite: confirme itens com stock baixo para evitar ruptura.');
+        }
+
+        if (details.length > 1 || critical) {
+            setStockFollowup({
+                title: critical ? 'Excecao de Stock Detectada' : 'Revisao Rapida de Stock',
+                details,
+                critical
+            });
+        }
+    };
+
+    const handleAction = async (order: Order, next: OrderStatus) => {
+        if (processingOrderId) return;
+        setProcessingOrderId(order.id);
+
+        let ok = false;
+
+        if (next === OrderStatus.REJECTED) {
+            const res = await rejectOrderAndRestoreStock(order.id);
+            ok = res.success;
+            if (!res.success && res.error) alert(res.error);
+        } else {
+            ok = await updateOrderStatus(order.id, next);
+        }
+
+        if (ok) {
+            playSound('success');
+            await evaluateStockFollowup(order, next === OrderStatus.REJECTED ? 'RECUSAR' : 'ACEITAR');
+            await load();
+            onUpdate();
+        }
+
+        setProcessingOrderId(null);
     };
 
     const getAction = (o: Order) => {
@@ -285,8 +344,8 @@ export const PharmacyOrdersModule = ({ pharmacyId, onUpdate }: { pharmacyId: str
                                             <td className="p-5 text-right" onClick={(e) => e.stopPropagation()}>
                                                 {act && (
                                                     <div className="flex justify-end gap-2">
-                                                        <button onClick={() => handleAction(o.id, act.next)} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-sm ${act.color}`}>{act.label}</button>
-                                                        {o.status === OrderStatus.PENDING && <button onClick={() => handleAction(o.id, OrderStatus.REJECTED)} className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all"><X size={16}/></button>}
+                                                        <button disabled={processingOrderId === o.id} onClick={() => handleAction(o, act.next)} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-sm disabled:opacity-60 ${act.color}`}>{act.label}</button>
+                                                        {o.status === OrderStatus.PENDING && <button disabled={processingOrderId === o.id} onClick={() => handleAction(o, OrderStatus.REJECTED)} className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-60"><X size={16}/></button>}
                                                     </div>
                                                 )}
                                             </td>
@@ -337,6 +396,43 @@ export const PharmacyOrdersModule = ({ pharmacyId, onUpdate }: { pharmacyId: str
                     </table>
                 </div>
             </div>
+
+            {stockFollowup && (
+                <div className="fixed inset-0 z-[220] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-xl bg-white rounded-[28px] border border-gray-100 shadow-2xl overflow-hidden">
+                        <div className={`px-6 py-4 flex items-center gap-3 ${stockFollowup.critical ? 'bg-red-50' : 'bg-amber-50'}`}>
+                            <div className={`p-2 rounded-xl ${stockFollowup.critical ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-700'}`}>
+                                <AlertTriangle size={18} />
+                            </div>
+                            <div>
+                                <h4 className={`text-sm font-black uppercase ${stockFollowup.critical ? 'text-red-700' : 'text-amber-700'}`}>{stockFollowup.title}</h4>
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Ajuste recomendado em Stock e Precos</p>
+                            </div>
+                        </div>
+                        <div className="p-6 space-y-2 max-h-[45vh] overflow-y-auto">
+                            {stockFollowup.details.map((line, idx) => (
+                                <p key={idx} className="text-xs font-semibold text-gray-700">- {line}</p>
+                            ))}
+                        </div>
+                        <div className="p-4 border-t bg-gray-50 flex gap-2 justify-end">
+                            {!stockFollowup.critical && (
+                                <button onClick={() => setStockFollowup(null)} className="px-4 py-2 rounded-xl text-xs font-black uppercase bg-white border border-gray-200 text-gray-700">
+                                    Rever Depois
+                                </button>
+                            )}
+                            <button
+                                onClick={() => {
+                                    setStockFollowup(null);
+                                    if (onGoToStock) onGoToStock();
+                                }}
+                                className="px-4 py-2 rounded-xl text-xs font-black uppercase bg-emerald-600 text-white"
+                            >
+                                Abrir Stock e Precos
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

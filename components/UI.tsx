@@ -229,7 +229,7 @@ export const Toast = ({ message, type, onClose }: { message: string, type: 'succ
     };
 
     return (
-        <div className={`fixed top-4 right-4 z-[9999] p-4 rounded-xl shadow-2xl flex items-center gap-3 animate-slide-in-right ${styles[type]}`}>
+        <div className={`fixed bottom-5 right-4 z-[9999] p-4 rounded-xl shadow-2xl flex items-center gap-3 animate-slide-in-right ${styles[type]}`}>
             {icons[type]}
             <span className="text-sm font-bold pr-4 border-r border-white/20">{message}</span>
             <button onClick={onClose} className="hover:scale-110 transition-transform"><X size={16}/></button>

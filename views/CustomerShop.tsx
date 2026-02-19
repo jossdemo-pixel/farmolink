@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft } from 'lucide-react';
+import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft, Trash2 } from 'lucide-react';
 import { Product, Pharmacy, PRODUCT_CATEGORIES, CartItem, Order, ChatMessage } from '../types';
 import { Button, Badge, Card } from '../components/UI';
 import { playSound } from '../services/soundService';
@@ -349,7 +349,7 @@ export const PharmacyProfileView = ({ pharmacy, onAddToCart, onBack }: { pharmac
     );
 };
 
-export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAddress, onBack }: any) => {
+export const CartView = ({ items, pharmacies, updateQuantity, onRemoveItem, onCheckout, userAddress, onBack }: any) => {
     const [type, setType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentAddress, setCurrentAddress] = useState(userAddress || '');
@@ -366,6 +366,12 @@ export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAd
             setType('PICKUP');
         }
     }, [pharm, type]);
+
+    useEffect(() => {
+        if (!isProcessing && items.length === 0) {
+            onBack();
+        }
+    }, [items.length, isProcessing, onBack]);
 
     const handleUseGps = async () => {
         setIsLocating(true);
@@ -449,6 +455,15 @@ export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAd
                                         <span className="font-black">{it.quantity}</span>
                                         <button disabled={isProcessing} onClick={() => updateQuantity(it.id, 1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">+</button>
                                     </div>
+                                    <button
+                                        disabled={isProcessing}
+                                        onClick={() => onRemoveItem(it.id)}
+                                        className="w-10 h-10 rounded-xl border border-red-100 text-red-500 hover:bg-red-50 transition-colors flex items-center justify-center"
+                                        aria-label="Remover item"
+                                        title="Remover item"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
                                 </div>
                             ))}
                         </div>

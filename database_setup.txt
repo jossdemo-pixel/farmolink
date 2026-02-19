@@ -483,6 +483,42 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS tr_decrement_stock ON public.orders;
 CREATE TRIGGER tr_decrement_stock AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION process_stock_decrement();
 
+CREATE OR REPLACE FUNCTION restore_stock_on_order_rejection()
+RETURNS TRIGGER AS $$
+DECLARE
+    item JSONB;
+    item_id_text TEXT;
+    qty INTEGER;
+BEGIN
+    IF (
+        (NEW.status IN ('Recusado', 'Cancelado', 'REJECTED', 'CANCELLED'))
+        AND (OLD.status NOT IN ('Recusado', 'Cancelado', 'REJECTED', 'CANCELLED'))
+    ) THEN
+        IF NEW.items IS NOT NULL THEN
+            FOR item IN SELECT * FROM jsonb_array_elements(NEW.items)
+            LOOP
+                item_id_text := item->>'id';
+                qty := (item->>'quantity')::INTEGER;
+
+                IF item_id_text ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN
+                    UPDATE public.products
+                    SET stock = stock + qty
+                    WHERE id = item_id_text::UUID;
+                END IF;
+            END LOOP;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_restore_stock_on_rejection ON public.orders;
+CREATE TRIGGER tr_restore_stock_on_rejection
+AFTER UPDATE OF status ON public.orders
+FOR EACH ROW
+EXECUTE FUNCTION restore_stock_on_order_rejection();
+
 CREATE OR REPLACE FUNCTION protect_commission_status_update()
 RETURNS TRIGGER AS $$
 BEGIN

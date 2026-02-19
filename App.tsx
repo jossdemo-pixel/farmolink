@@ -13,7 +13,7 @@ import { fetchOrders, fetchPrescriptionRequests, createOrder } from './services/
 import { getCacheForUser, getLastSyncForUser, setCacheForUser } from './services/dataService';
 import { playSound } from './services/soundService';
 import { getCurrentPosition, calculateDistance } from './services/locationService';
-import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info } from 'lucide-react';
+import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info, Trash2 } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
 import { SUPABASE_URL } from './services/supabaseClient';
 
@@ -74,6 +74,7 @@ export const App: React.FC = () => {
     const [pendingCartProduct, setPendingCartProduct] = useState<Product | null>(null);
     const [pendingCartQuantity, setPendingCartQuantity] = useState<number>(1);
     const [uxToast, setUxToast] = useState<{ msg: string; type: 'success' | 'info' } | null>(null);
+    const lastCustomerPageRef = useRef<string>('home');
 
     const isPasswordRecoveryFlow = useCallback(() => {
         try {
@@ -444,6 +445,12 @@ export const App: React.FC = () => {
     }, [checkSession]);
 
     useEffect(() => {
+        if (user?.role === UserRole.CUSTOMER && page !== 'cart') {
+            lastCustomerPageRef.current = page;
+        }
+    }, [page, user?.role]);
+
+    useEffect(() => {
         if (navigator.onLine) {
             syncOfflineQueue();
         }
@@ -547,7 +554,7 @@ export const App: React.FC = () => {
         });
 
         playSound('success');
-        showUxToast(`${product.name} adicionado ao carrinho (${safeQuantity}).`, 'success');
+        showUxToast(`${product.name} adicionado (${safeQuantity}). Toque no carrinho para finalizar.`, 'success');
         return true;
     };
 
@@ -572,6 +579,21 @@ export const App: React.FC = () => {
     const closeAddToCartModal = () => {
         setPendingCartProduct(null);
         setPendingCartQuantity(1);
+    };
+
+    const removeItemFromCart = (productId: string) => {
+        setCart(prev => {
+            const updated = prev.filter(item => item.id !== productId);
+            if (updated.length === 0) setActivePharmacyId(null);
+            return updated;
+        });
+    };
+
+    const removePendingProductFromModal = () => {
+        if (!pendingCartProduct) return;
+        removeItemFromCart(pendingCartProduct.id);
+        showUxToast(`${pendingCartProduct.name} removido do carrinho.`, 'info');
+        closeAddToCartModal();
     };
 
     const confirmAddToCartFromModal = () => {
@@ -762,7 +784,7 @@ export const App: React.FC = () => {
                         onBack={() => setPage('pharmacies-list')} 
                     />
                 ) : <div className="p-10 text-center">Farmácia não encontrada</div>;
-            case 'cart': return <CartView items={cart} pharmacies={pharmacies} updateQuantity={updateCartQuantity} userAddress={user.address} onBack={() => setPage('home')} onCheckout={handleCheckout} />;
+            case 'cart': return <CartView items={cart} pharmacies={pharmacies} updateQuantity={updateCartQuantity} onRemoveItem={removeItemFromCart} userAddress={user.address} onBack={() => setPage(lastCustomerPageRef.current || 'home')} onCheckout={handleCheckout} />;
             // ADICIONADA PROP onAddToCart
             case 'orders': return <CustomerOrdersView orders={orders} pharmacies={pharmacies} customerId={user?.role === UserRole.CUSTOMER ? user.id : undefined} onRefresh={refreshOrdersAndPrescriptions} onAddToCart={handleAddToCart} onNavigate={setPage} />;
             case 'prescriptions': return <PrescriptionsListView prescriptions={prescriptions} pharmacies={pharmacies} onRefresh={refreshOrdersAndPrescriptions} user={user} onNavigate={setPage} />;
@@ -770,7 +792,7 @@ export const App: React.FC = () => {
             case 'profile': return <CustomerProfileView user={user} onUpdateUser={setUser} />;
             case 'support': return <SupportView user={user} />;
             case 'dashboard': return <PharmacyOverview stats={stats} pharmacyId={user.pharmacyId} isAvailable={pharmacies.find(p => p.id === user.pharmacyId)?.isAvailable} onRefresh={refreshOrdersAndPrescriptions} setView={setPage} />;
-            case 'pharmacy-orders': return <PharmacyOrdersModule pharmacyId={user.pharmacyId!} onUpdate={refreshOrdersAndPrescriptions} />;
+            case 'pharmacy-orders': return <PharmacyOrdersModule pharmacyId={user.pharmacyId!} onUpdate={refreshOrdersAndPrescriptions} onGoToStock={() => setPage('pharmacy-products')} />;
             case 'pharmacy-requests': return <PharmacyRequestsModule pharmacyId={user.pharmacyId!} requests={prescriptions} onRefresh={refreshOrdersAndPrescriptions} />;
             case 'pharmacy-products': return <PharmacyProductsView pharmacyId={user.pharmacyId!} onRefresh={refreshOrdersAndPrescriptions} />;
             case 'pharmacy-financial': return <PharmacyFinancialView pharmacyId={user.pharmacyId!} />;
@@ -885,7 +907,16 @@ export const App: React.FC = () => {
                             <div className="flex items-center gap-3">
                                 <button
                                     type="button"
-                                    onClick={() => setPendingCartQuantity(prev => Math.max(1, prev - 1))}
+                                    onClick={() => {
+                                        setPendingCartQuantity(prev => {
+                                            const next = prev - 1;
+                                            if (next <= 0) {
+                                                removePendingProductFromModal();
+                                                return 1;
+                                            }
+                                            return next;
+                                        });
+                                    }}
                                     className="w-11 h-11 rounded-2xl border border-gray-200 text-xl font-black text-gray-600 hover:bg-gray-50 transition-colors"
                                 >
                                     -
@@ -921,9 +952,21 @@ export const App: React.FC = () => {
                                     +
                                 </button>
                             </div>
+                            <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">
+                                Depois de adicionar, clique no carrinho para concluir o pedido.
+                            </p>
                         </div>
 
                         <div className="flex gap-3 pt-1">
+                            <button
+                                type="button"
+                                onClick={removePendingProductFromModal}
+                                className="h-11 w-11 rounded-2xl border border-red-200 text-red-500 font-bold hover:bg-red-50 transition-colors flex items-center justify-center"
+                                aria-label="Remover do carrinho"
+                                title="Remover do carrinho"
+                            >
+                                <Trash2 size={18} />
+                            </button>
                             <button
                                 type="button"
                                 onClick={closeAddToCartModal}
