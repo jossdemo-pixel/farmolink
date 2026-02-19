@@ -34,98 +34,36 @@ export const UpdatePasswordView: React.FC<{ onComplete: () => void }> = ({ onCom
     useEffect(() => {
         let cancelled = false;
 
-        const readRecoveryParams = () => {
-            try {
-                const searchParams = new URLSearchParams(window.location.search);
-                const hashRaw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
-                const hashParams = new URLSearchParams(hashRaw);
-
-                return {
-                    accessToken: searchParams.get('access_token') || hashParams.get('access_token'),
-                    refreshToken: searchParams.get('refresh_token') || hashParams.get('refresh_token'),
-                    type: searchParams.get('type') || hashParams.get('type'),
-                    code: searchParams.get('code') || hashParams.get('code')
-                };
-            } catch (e) {
-                return { accessToken: null, refreshToken: null, type: null, code: null };
-            }
-        };
-
-        const ensureRecoverySession = async () => {
-            const { accessToken, refreshToken, type, code } = readRecoveryParams();
-            const isRecoveryType = type === 'recovery' || type === 'invite' || type === 'magiclink' || !type;
-
-            if (accessToken && refreshToken && isRecoveryType) {
-                const { error } = await supabase.auth.setSession({
-                    access_token: accessToken,
-                    refresh_token: refreshToken
-                });
-                if (error) {
-                    throw error;
-                }
-                return;
-            }
-
-            if (code) {
-                const { error } = await supabase.auth.exchangeCodeForSession(code);
-                if (error) {
-                    throw error;
-                }
-            }
-        };
-
         const check = async () => {
             setSessionError(null);
             setSessionChecked(false);
 
-            try {
-                await ensureRecoverySession();
-            } catch (e) {
-                // segue para retries de sessão; alguns links já são processados automaticamente
-            }
-
-            for (let attempt = 0; attempt < 8; attempt++) {
+            for (let attempt = 0; attempt < 4; attempt++) {
                 const { data } = await supabase.auth.getSession();
                 if (cancelled) return;
 
                 if (data?.session?.user) {
-                    setSessionError(null);
                     setSessionChecked(true);
                     return;
                 }
 
-                await new Promise((r) => setTimeout(r, 350));
+                await new Promise((r) => setTimeout(r, 450));
             }
 
             setSessionChecked(true);
             setSessionError('Link inválido ou expirado. Solicite uma nova recuperação de senha.');
         };
 
-        const { data: authState } = supabase.auth.onAuthStateChange((event, session) => {
-            if (cancelled) return;
-            if ((event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
-                setSessionError(null);
-                setSessionChecked(true);
-            }
-        });
-
         check();
         return () => {
             cancelled = true;
-            authState.subscription.unsubscribe();
         };
     }, []);
 
     const handleUpdate = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!sessionChecked) {
-            alert('Aguarde a validação do link de recuperação e tente novamente.');
-            return;
-        }
-        if (sessionError) {
-            alert(sessionError);
-            return;
-        }
+        if (!sessionChecked) return;
+        if (sessionError) return;
         if(password.length < 6) return alert("A senha deve ter no mínimo 6 caracteres");
         if(password !== confirm) return alert("As senhas não coincidem");
 
@@ -151,13 +89,6 @@ export const UpdatePasswordView: React.FC<{ onComplete: () => void }> = ({ onCom
                 </div>
                 <h2 className="text-2xl font-bold text-gray-800 mb-2">Definir Nova Senha</h2>
                 <p className="text-gray-500 mb-6 text-sm">Digite sua nova senha abaixo para recuperar o acesso.</p>
-
-                {!sessionChecked && !sessionError && (
-                    <div className="mb-4 bg-blue-50 border border-blue-200 rounded-2xl p-3 text-blue-800 text-sm flex gap-2 items-start text-left">
-                        <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                        <div>Validando link seguro de recuperação...</div>
-                    </div>
-                )}
 
                 {sessionError ? (
                     <div className="text-left space-y-4">
@@ -192,8 +123,8 @@ export const UpdatePasswordView: React.FC<{ onComplete: () => void }> = ({ onCom
                             icon={<Lock className="h-5 w-5 text-gray-400" />}
                         />
                     </div>
-                    <Button type="submit" disabled={loading || !sessionChecked} className="w-full py-3">
-                        {loading ? 'Salvando...' : (!sessionChecked ? 'Validando link...' : 'Atualizar Senha')}
+                    <Button type="submit" disabled={loading} className="w-full py-3">
+                        {loading ? 'Salvando...' : 'Atualizar Senha'}
                     </Button>
                 </form>
                 )}

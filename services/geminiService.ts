@@ -1,59 +1,13 @@
 import { supabase } from './supabaseClient';
 import { PrescriptionRequest } from '../types';
 
-/**
- * FarmoLink AI Service - Production Bridge
- * Structured FarmoBot flow only.
- */
-
 const TIMEOUT = 30000;
 const VISION_TIMEOUT = 45000;
-const CONTEXT_LIMIT = 120;
-const CONTEXT_LIMIT_PREFERRED_PHARMACY = 60;
-const CONTEXT_LIMIT_GLOBAL = 120;
 
-const SEARCH_STOPWORDS = new Set([
-  'a',
-  'o',
-  'os',
-  'as',
-  'de',
-  'da',
-  'do',
-  'dos',
-  'das',
-  'um',
-  'uma',
-  'para',
-  'por',
-  'com',
-  'sem',
-  'que',
-  'qual',
-  'quais',
-  'quanto',
-  'tem',
-  'tenho',
-  'queria',
-  'quero',
-  'preciso',
-  'saber',
-  'sobre',
-  'no',
-  'na',
-  'nos',
-  'nas',
-  'me',
-  'minha',
-  'meu',
-  'favor',
-  'porfavor',
-  'favor',
-]);
-
-const CATALOG_INTENT_REGEX = /\b(tem|disponivel|stock|preco|valor|custa|produto|medicamento|reservar|reserva|comprar|carrinho)\b/;
-const NON_CATALOG_INTENT_REGEX = /\b(agendar|agendamento|consulta|horario|suporte|reclamar|erro|problema|enviar receita|upload receita)\b/;
-const FORBIDDEN_BOT_TERMS = ['mambo'];
+export interface BotActionEvent {
+  type: string;
+  payload?: Record<string, unknown>;
+}
 
 const normalizeText = (value: string) =>
   String(value || '')
@@ -62,291 +16,123 @@ const normalizeText = (value: string) =>
     .toLowerCase()
     .trim();
 
-const shouldBuildProductsContext = (message: string): boolean => {
-  const normalized = normalizeText(message);
-  if (!normalized) return false;
-
-  const hasCatalogSignal = CATALOG_INTENT_REGEX.test(normalized);
-  if (hasCatalogSignal) return true;
-
-  if (NON_CATALOG_INTENT_REGEX.test(normalized)) return false;
-
-  return extractSearchTerms(message).length > 0 && normalized.split(/\s+/).length <= 5;
-};
-
-const extractSearchTerms = (message: string): string[] => {
-  const normalized = normalizeText(message).replace(/[^a-z0-9\s]/g, ' ');
-  const words = normalized
-    .split(/\s+/)
-    .filter((w) => w.length >= 4 && !SEARCH_STOPWORDS.has(w));
-  return Array.from(new Set(words)).slice(0, 4);
-};
-
-const sanitizeBotText = (text: string): string => {
-  let output = String(text || '');
-  FORBIDDEN_BOT_TERMS.forEach((term) => {
-    const regex = new RegExp(`\\b${term}\\b`, 'gi');
-    output = output.replace(regex, 'cliente');
-  });
-  return output.replace(/\s{2,}/g, ' ').trim();
-};
-
-const deriveContextSeed = (message: string, history?: Array<{ role?: string; text?: string; content?: string }>) => {
-  if (extractSearchTerms(message).length > 0) return message;
-  const recentUserMessages = (history || [])
-    .filter((item) => String(item?.role || '').toLowerCase() === 'user')
-    .map((item) => String(item?.text || item?.content || '').trim())
-    .filter(Boolean)
-    .slice(-4)
-    .reverse();
-
-  const candidate = recentUserMessages.find((text) => extractSearchTerms(text).length > 0);
-  if (!candidate) return message;
-  return `${candidate} ${message}`.trim();
-};
-
-const fetchProductsByTerms = async (terms: string[], pharmacyId?: string, limit = CONTEXT_LIMIT_GLOBAL) => {
-  if (terms.length === 0) return [];
-  const orFilter = terms.map((t) => `name.ilike.%${t}%`).join(',');
-  let query = supabase
-    .from('products')
-    .select('id, name, price, pharmacy_id, stock, requires_prescription')
-    .or(orFilter)
-    .order('stock', { ascending: false })
-    .order('name', { ascending: true })
-    .limit(limit);
-
-  if (pharmacyId) query = query.eq('pharmacy_id', pharmacyId);
-
-  const { data, error } = await query;
-  if (error || !Array.isArray(data)) return [];
-  return data;
-};
-
-const dedupeProducts = (items: any[]) => {
-  const map = new Map<string, any>();
-  (items || []).forEach((item: any) => {
-    const id = String(item?.id || '');
-    if (!id || map.has(id)) return;
-    map.set(id, item);
-  });
-  return Array.from(map.values()).slice(0, CONTEXT_LIMIT);
-};
-
-const buildProductsContext = async (
-  message: string,
-  history?: Array<{ role?: string; text?: string; content?: string }>,
-  preferredPharmacyId?: string,
-) => {
-  const seed = deriveContextSeed(message, history);
-  const terms = extractSearchTerms(seed);
-  if (terms.length === 0) return [];
-
-  const [preferredProducts, globalProducts] = await Promise.all([
-    preferredPharmacyId ? fetchProductsByTerms(terms, preferredPharmacyId, CONTEXT_LIMIT_PREFERRED_PHARMACY) : Promise.resolve([]),
-    fetchProductsByTerms(terms, undefined, CONTEXT_LIMIT_GLOBAL),
+const extractSearchTokens = (value: string) => {
+  const stopwords = new Set([
+    'com',
+    'para',
+    'uma',
+    'umas',
+    'uns',
+    'dos',
+    'das',
+    'que',
+    'como',
+    'sobre',
+    'onde',
+    'quero',
+    'preciso',
+    'tem',
+    'por',
+    'favor',
+    'de',
+    'da',
+    'do',
+    'na',
+    'no',
+    'a',
+    'o',
+    'e'
   ]);
 
-  const products = dedupeProducts([...preferredProducts, ...globalProducts]);
-  if (products.length === 0) return [];
+  return Array.from(
+    new Set(
+      normalizeText(value)
+        .split(/[^a-z0-9]+/g)
+        .map((part) => part.trim())
+        .filter((part) => part.length >= 3 && !stopwords.has(part))
+    )
+  ).slice(0, 4);
+};
 
-  const pharmacyIds = Array.from(
-    new Set(products.map((p) => String(p.pharmacy_id || '')).filter(Boolean)),
-  );
-  const pharmacyMap: Record<string, { name: string; is_available: boolean; status: string }> = {};
+const withTimeout = <T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error('timeout');
+      (err as any).name = 'AbortError';
+      reject(err);
+    }, timeoutMs);
 
-  if (pharmacyIds.length > 0) {
-    const { data: pharmacies } = await supabase
-      .from('pharmacies')
-      .select('id, name, is_available, status')
-      .in('id', pharmacyIds);
-
-    (pharmacies || []).forEach((ph: any) => {
-      pharmacyMap[String(ph.id)] = {
-        name: String(ph.name || 'Farmacia'),
-        is_available: !!ph.is_available,
-        status: String(ph.status || ''),
-      };
-    });
-  }
-
-  return products.map((p: any) => {
-    const pharmacyId = String(p.pharmacy_id || '');
-    const meta = pharmacyMap[pharmacyId];
-    return {
-      id: p.id,
-      name: p.name,
-      price: Number(p.price || 0),
-      stock: Number(p.stock || 0),
-      requiresPrescription: !!p.requires_prescription,
-      pharmacyId,
-      pharmacyName: meta?.name || 'Farmacia',
-      pharmacyAvailable: !!meta?.is_available,
-      pharmacyStatus: meta?.status || '',
-    };
+    fn()
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
   });
+
+const isAuthError = (error: any, data?: any): boolean => {
+  const text = `${error?.message || ''} ${data?.error || ''} ${data?.details || ''}`.toLowerCase();
+  return (
+    text.includes('401') ||
+    text.includes('unauthorized') ||
+    text.includes('nao autenticado') ||
+    text.includes('sessao invalida') ||
+    text.includes('jwt')
+  );
 };
 
-export type BotConversationStatus = 'bot_active' | 'escalated_pharmacy' | 'escalated_admin' | 'resolved';
-export type BotMode = 'COMMERCIAL' | 'EDUCATIONAL' | 'SENSITIVE' | 'NAVIGATION';
-export type BotRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type BotEscalationTarget = 'BOT' | 'PHARMACY' | 'ADMIN';
-
-export interface BotActionEvent {
-  type: string;
-  payload?: Record<string, unknown>;
-}
-
-export interface FarmoBotReply {
-  greeting: string;
-  objective: string;
-  safety?: string;
-  cta?: string;
-}
-
-export interface FarmoBotMessageResult {
-  text: string;
-  actions: BotActionEvent[];
-  reply?: FarmoBotReply;
-  conversationId?: string;
-  conversationStatus?: BotConversationStatus;
-  mode?: BotMode;
-  riskLevel?: BotRiskLevel;
-  escalationTarget?: BotEscalationTarget;
-  triggers?: string[];
-}
-
-const EDGE_RETRYABLE_MESSAGES = [
-  'failed to send a request to the edge function',
-  'edge function returned a non-2xx status code',
-  'network',
-  'fetch',
-  'timeout',
-];
-
-const isRetryableEdgeError = (error: any): boolean => {
-  const rawMessage = String(error?.message || error?.name || '').toLowerCase();
-  if (!rawMessage) return false;
-  return EDGE_RETRYABLE_MESSAGES.some((token) => rawMessage.includes(token));
-};
-
-const invokeGeminiWithRetry = async (
+const invokeGemini = async (
   body: Record<string, unknown>,
-  headers: Record<string, string>,
-  attempts = 2,
-) => {
-  let lastData: any = null;
-  let lastError: any = null;
+  retryOnAuthError = false
+): Promise<{ data: any; error: any; authFailed: boolean }> => {
+  const first = await supabase.functions.invoke('gemini', { body });
 
-  for (let i = 0; i < attempts; i += 1) {
-    const { data, error } = await supabase.functions.invoke('gemini', { body, headers });
-    lastData = data;
-    lastError = error;
-
-    if (!error) return { data, error: null };
-    if (!isRetryableEdgeError(error) || i === attempts - 1) break;
-
-    await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
+  if (!first.error && !first.data?.error) {
+    return { data: first.data, error: null, authFailed: false };
   }
 
-  return { data: lastData, error: lastError };
-};
+  const firstError =
+    first.error || new Error(first.data?.details || first.data?.error || 'Falha na Edge Function');
+  const firstAuthFailed = isAuthError(firstError, first.data);
 
-const buildLocalFallbackResult = (message: string, productsContext: any[]): FarmoBotMessageResult => {
-  const normalized = normalizeText(message);
-  const hasCatalogIntent = /\b(tem|disponivel|stock|preco|valor|custa|farmacia|farmacias|reservar|comprar|carrinho)\b/.test(normalized);
-  const contextItems = Array.isArray(productsContext) ? productsContext.slice(0, 3) : [];
+  if (retryOnAuthError && firstAuthFailed) {
+    await supabase.auth.refreshSession();
+    const second = await supabase.functions.invoke('gemini', { body });
 
-  if (hasCatalogIntent && contextItems.length > 0) {
-    const summary = contextItems
-      .map((item: any) => `${item.name} (Kz ${Number(item.price || 0)} - ${item.pharmacyName || 'Farmacia'})`)
-      .join('; ');
+    if (!second.error && !second.data?.error) {
+      return { data: second.data, error: null, authFailed: false };
+    }
+
+    const secondError =
+      second.error || new Error(second.data?.details || second.data?.error || 'Falha na Edge Function');
 
     return {
-      text: `Ola. Estou com instabilidade na consulta em tempo real. Com base no catalogo local, encontrei: ${summary}. Quer abrir a lista de farmacias para confirmar disponibilidade agora?`,
-      actions: [{ type: 'OPEN_PHARMACIES_NEARBY' }],
-      conversationStatus: 'bot_active',
-      mode: 'NAVIGATION',
-      riskLevel: 'LOW',
-      escalationTarget: 'BOT',
-      triggers: [],
+      data: second.data,
+      error: secondError,
+      authFailed: isAuthError(secondError, second.data)
     };
   }
 
-  return {
-    text: 'Ola. Estou com instabilidade temporaria no FarmoBot. Posso seguir com navegacao segura: enviar receita, ver farmacias ou abrir carrinho.',
-    actions: [{ type: 'OPEN_UPLOAD_RX' }, { type: 'OPEN_PHARMACIES_NEARBY' }, { type: 'OPEN_CART' }],
-    conversationStatus: 'bot_active',
-    mode: 'NAVIGATION',
-    riskLevel: 'LOW',
-    escalationTarget: 'BOT',
-    triggers: [],
-  };
-};
-
-const BOT_ACTION_ALIASES: Record<string, string> = {
-  upload_prescription: 'OPEN_UPLOAD_RX',
-  reserve_product: 'ADD_TO_CART',
-  find_nearby_pharmacies: 'OPEN_PHARMACIES_NEARBY',
-  view_other_pharmacies: 'OPEN_PHARMACIES_NEARBY',
-  open_support: 'OPEN_SUPPORT',
-  open_cart: 'OPEN_CART',
-  open_prescriptions: 'OPEN_PRESCRIPTIONS',
-  escalate_pharmacy: 'ESCALATE_PHARMACY',
-  escalate_admin: 'ESCALATE_ADMIN',
-};
-
-const normalizeActionType = (rawType: string): string => {
-  const cleaned = String(rawType || '').trim();
-  if (!cleaned) return '';
-  return BOT_ACTION_ALIASES[cleaned] || cleaned.toUpperCase();
-};
-
-const parseActions = (actionsRaw: unknown): BotActionEvent[] => {
-  if (!Array.isArray(actionsRaw)) return [];
-  return actionsRaw
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null;
-      const type = normalizeActionType((item as any).type);
-      if (!type) return null;
-      return {
-        type,
-        payload: (item as any).payload && typeof (item as any).payload === 'object' ? (item as any).payload : {},
-      } as BotActionEvent;
-    })
-    .filter((a): a is BotActionEvent => !!a);
-};
-
-const composeReplyText = (reply?: Partial<FarmoBotReply>, fallbackText?: string): string => {
-  if (reply?.objective || reply?.greeting || reply?.safety || reply?.cta) {
-    const blocks = [reply?.greeting, reply?.objective, reply?.safety, reply?.cta]
-      .map((b) => String(b || '').trim())
-      .filter(Boolean);
-    if (blocks.length > 0) return sanitizeBotText(blocks.join(' '));
-  }
-  return sanitizeBotText(fallbackText || 'Nao consegui gerar resposta agora. Tente novamente.');
+  return { data: first.data, error: firstError, authFailed: firstAuthFailed };
 };
 
 export const checkAiHealth = async (): Promise<boolean> => {
   if (!navigator.onLine) return false;
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
-
-    const session = await supabase.auth.getSession();
-    const token = session.data.session?.access_token;
-
-    const { data, error } = await supabase.functions.invoke('gemini', {
-      body: { action: 'ping' },
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    clearTimeout(timeoutId);
+    const { data, error } = await withTimeout(
+      () => invokeGemini({ action: 'ping' }, false),
+      TIMEOUT
+    );
 
     if (error) {
       console.error('AI Health check failed:', error);
       return false;
     }
+
     return data?.status === 'ok';
   } catch (e) {
     console.error('AI Health check error:', e);
@@ -356,55 +142,24 @@ export const checkAiHealth = async (): Promise<boolean> => {
 
 export const fetchChatHistory = async (userId: string) => {
   try {
-    const { data: activeConversation, error: conversationError } = await supabase
-      .from('conversations')
-      .select('id')
+    const { data } = await supabase
+      .from('bot_conversations')
+      .select('role, content')
       .eq('user_id', userId)
-      .neq('status', 'resolved')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (conversationError || !activeConversation?.id) return [];
-
-    const { data, error } = await supabase
-      .from('conversation_messages')
-      .select('conversation_id, role, content')
-      .eq('conversation_id', activeConversation.id)
       .order('created_at', { ascending: true });
 
-    if (error) return [];
-
-    return (data || []).map((row: any) => ({
-      conversationId: String(row?.conversation_id || activeConversation.id),
-      role: String(row?.role || '').toUpperCase() === 'USER' ? 'user' : 'model',
-      content: String(row?.content || ''),
-    }));
+    return data || [];
   } catch (e) {
     console.error('Erro ao carregar historico:', e);
     return [];
   }
 };
 
-export const clearChatHistory = async (userId: string): Promise<boolean> => {
+export const saveChatMessage = async (userId: string, role: 'user' | 'model', content: string) => {
   try {
-    const { error } = await supabase
-      .from('conversations')
-      .update({
-        status: 'resolved',
-        unresolved_turns: 0,
-        frustration_score: 0,
-        escalation_level: 1,
-        resolved_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', userId)
-      .neq('status', 'resolved');
-
-    return !error;
+    await supabase.from('bot_conversations').insert([{ user_id: userId, role, content }]);
   } catch (e) {
-    console.error('Erro ao limpar historico:', e);
-    return false;
+    console.error('Erro ao salvar mensagem:', e);
   }
 };
 
@@ -414,151 +169,180 @@ export const getChatSession = () => {
       message,
       userName,
       history,
-      userId,
-      conversationId,
-      pharmacyId,
-      forceNewConversation,
+      userId
     }: {
       message: string;
       userName?: string;
       history?: any[];
       userId: string;
-      conversationId?: string;
-      pharmacyId?: string;
-      forceNewConversation?: boolean;
-    }): Promise<FarmoBotMessageResult> => {
-      let productsContext: any[] = [];
+    }) => {
       try {
         if (!message?.trim()) {
-          return { text: 'Por favor, escreva uma mensagem.', actions: [] };
+          return { text: 'Por favor, escreva uma mensagem.' };
         }
 
-        const [sessionResult, productsContextResult] = await Promise.all([
-          supabase.auth.getSession(),
-          shouldBuildProductsContext(message)
-            ? buildProductsContext(message, history, pharmacyId)
-            : Promise.resolve([]),
-        ]);
-        productsContext = productsContextResult;
+        const searchTokens = extractSearchTokens(message);
+        const firstToken = searchTokens[0] || '';
 
-        let token = sessionResult.data.session?.access_token;
-        if (!token) {
-          const refreshResult = await supabase.auth.refreshSession();
-          token = refreshResult.data.session?.access_token || token;
+        let productsQuery = supabase
+          .from('products')
+          .select('id,name,price,stock,requires_prescription,pharmacy_id')
+          .limit(50);
+
+        if (firstToken) {
+          productsQuery = productsQuery.ilike('name', `%${firstToken}%`);
         }
-        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-        const localFallback = buildLocalFallbackResult(message, productsContext);
 
-        const structuredPayload = {
-          action: 'farmobot_message',
-          message,
-          userName,
-          userId,
-          conversationId,
-          pharmacyId,
-          forceNewConversation: !!forceNewConversation,
-          history: history?.map((h) => ({ role: h.role, content: h.text || h.content })),
-          productsContext,
-        };
+        let { data: products } = await productsQuery;
 
-        let { data, error } = await invokeGeminiWithRetry(structuredPayload, headers, 2);
+        if ((!products || products.length === 0) && firstToken) {
+          const fallback = await supabase
+            .from('products')
+            .select('id,name,price,stock,requires_prescription,pharmacy_id')
+            .limit(50);
+          products = fallback.data || [];
+        }
+
+        const pharmacyIds = Array.from(
+          new Set((products || []).map((p: any) => p.pharmacy_id).filter(Boolean))
+        );
+
+        let pharmacyMap = new Map<string, any>();
+        if (pharmacyIds.length > 0) {
+          const { data: pharmacies } = await supabase
+            .from('pharmacies')
+            .select('id,name,status,is_available')
+            .in('id', pharmacyIds);
+
+          pharmacyMap = new Map((pharmacies || []).map((ph: any) => [String(ph.id), ph]));
+        }
+
+        const { data, error, authFailed } = await withTimeout(
+          () =>
+            invokeGemini(
+              {
+                action: 'farmobot_message',
+                message,
+                userName,
+                history: history?.map((h: any) => ({ role: h.role, content: h.text || h.content })),
+                productsContext: (products || []).map((p: any) => ({
+                  id: p.id,
+                  name: p.name,
+                  price: p.price,
+                  stock: p.stock,
+                  requiresPrescription: p.requires_prescription,
+                  pharmacyId: p.pharmacy_id,
+                  pharmacyName: pharmacyMap.get(String(p.pharmacy_id || ''))?.name || 'Farmacia',
+                  pharmacyStatus: pharmacyMap.get(String(p.pharmacy_id || ''))?.status || '',
+                  pharmacyAvailable: !!pharmacyMap.get(String(p.pharmacy_id || ''))?.is_available
+                }))
+              },
+              true
+            ),
+          TIMEOUT
+        );
 
         if (error) {
           console.error('Erro na Edge Function:', error);
-          return localFallback;
+
+          if (authFailed) {
+            throw new Error('Sessao expirada. Termine sessao e entre novamente.');
+          }
+
+          if (String(error?.message || '').toLowerCase().includes('timeout')) {
+            throw new Error('Resposta demorou muito. Por favor, tente novamente.');
+          }
+
+          throw new Error(error?.message || 'Erro ao processar sua mensagem');
         }
 
-        if (data?.error) {
-          console.error('Erro no payload da Edge Function:', data);
-          return localFallback;
+        saveChatMessage(userId, 'user', message);
+        if (data?.text) {
+          saveChatMessage(userId, 'model', data.text);
         }
 
-        const reply = data?.reply || undefined;
-        const actions = parseActions(data?.actions);
-        const text = composeReplyText(reply, data?.text || 'Desculpe, recebi uma resposta vazia.');
-
-        return {
-          text,
-          reply,
-          actions,
-          conversationId: data?.conversation_id || data?.conversationId,
-          conversationStatus: data?.conversation_status || data?.conversationStatus,
-          mode: data?.mode,
-          riskLevel: data?.risk_level || data?.riskLevel,
-          escalationTarget: data?.escalation_target || data?.escalationTarget,
-          triggers: Array.isArray(data?.triggers) ? data.triggers : [],
-        };
+        return { text: data?.text || 'Desculpe, recebi uma resposta vazia.' };
       } catch (error: any) {
-        console.error('Falha no Chat:', error.message);
-        return buildLocalFallbackResult(message, productsContext);
+        console.error('Falha no Chat:', error?.message || error);
+
+        if (error?.name === 'AbortError') {
+          return { text: 'Tempo limite excedido. Tente novamente em instantes.' };
+        }
+
+        return { text: `Erro: ${error?.message || 'Falha de conexao'}.` };
       }
-    },
+    }
   };
 };
 
-export const analyzePrescriptionVision = async (imageUrl: string): Promise<PrescriptionRequest['ai_metadata']> => {
+export const analyzePrescriptionVision = async (
+  imageUrl: string
+): Promise<PrescriptionRequest['ai_metadata']> => {
   if (!navigator.onLine) {
     return {
       confidence: 0,
       extracted_text: 'Sem internet. A leitura por IA esta indisponivel offline.',
       is_validated: false,
-      suggested_items: [],
+      suggested_items: []
     };
   }
+
   try {
     let optimizedUrl = imageUrl;
     if (imageUrl.includes('cloudinary')) {
       optimizedUrl = imageUrl.replace('/upload/', '/upload/w_800,q_auto:eco,f_auto/');
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), VISION_TIMEOUT);
-
-    const session = await supabase.auth.getSession();
-    const token = session.data.session?.access_token;
-
-    const { data, error } = await supabase.functions.invoke('gemini', {
-      body: {
-        action: 'vision',
-        imageUrl: optimizedUrl,
-        timeout: VISION_TIMEOUT,
-      },
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    clearTimeout(timeoutId);
+    const { data, error, authFailed } = await withTimeout(
+      () =>
+        invokeGemini(
+          {
+            action: 'vision',
+            imageUrl: optimizedUrl,
+            timeout: VISION_TIMEOUT
+          },
+          false
+        ),
+      VISION_TIMEOUT
+    );
 
     if (error) {
       console.error('Erro Vision:', error);
+
+      if (authFailed) {
+        throw new Error('Sessao expirada. Termine sessao e entre novamente.');
+      }
+
       throw error;
     }
 
-    if (!data || data.error) {
-      throw new Error(data?.details || 'Erro no processamento da imagem.');
+    if (!data) {
+      throw new Error('Erro no processamento da imagem.');
     }
 
     return {
-      confidence: data.confidence ?? 0.0,
+      confidence: data.confidence ?? 0,
       extracted_text: data.extracted_text || 'Texto nao identificado.',
       is_validated: false,
-      suggested_items: data.suggested_items || [],
+      suggested_items: data.suggested_items || []
     };
   } catch (err: any) {
-    console.error('Erro Vision IA:', err.message);
+    console.error('Erro Vision IA:', err?.message || err);
 
-    let errorMessage = 'Nao foi possivel ler automaticamente a receita (erro de conexao). Por favor, descreva os medicamentos.';
+    let errorMessage =
+      'Nao foi possivel ler automaticamente a receita. Descreva os medicamentos manualmente.';
 
-    if (err.name === 'AbortError') {
-      errorMessage = 'Processamento demorou muito. Tente com uma foto de melhor qualidade ou mais clara.';
-    } else if (err.message?.includes('401')) {
-      errorMessage = 'Erro de autenticacao. Por favor, faca login novamente.';
+    if (err?.name === 'AbortError') {
+      errorMessage = 'Processamento demorou muito. Tente com uma foto mais clara.';
+    } else if (String(err?.message || '').toLowerCase().includes('sessao expirada')) {
+      errorMessage = 'Sessao expirada. Termine sessao e entre novamente.';
     }
 
     return {
       confidence: 0,
       extracted_text: errorMessage,
       is_validated: false,
-      suggested_items: [],
+      suggested_items: []
     };
   }
 };

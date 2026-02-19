@@ -1,8 +1,8 @@
-﻿
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft, Trash2 } from 'lucide-react';
+import { Search, MapPin, Plus, Store, Upload, Star, ArrowLeft, Pill, ChevronRight, Bike, Clock, ShoppingCart, X, Loader2, AlertCircle, AlertTriangle, FileText, MessageCircle, Send, History, RefreshCw, Trophy, Sparkles, Navigation, Truck, Phone, ChevronDown, ChevronLeft } from 'lucide-react';
 import { Product, Pharmacy, PRODUCT_CATEGORIES, CartItem, Order, ChatMessage } from '../types';
-import { Button, Badge } from '../components/UI';
+import { Button, Badge, Card } from '../components/UI';
 import { playSound } from '../services/soundService';
 import { formatProductNameForCustomer } from '../services/geminiService';
 import { fetchProducts } from '../services/productService';
@@ -159,82 +159,44 @@ export const HomeView = ({ products, pharmacies, onAddToCart, onNavigate, onView
 
 export const AllPharmaciesView = ({ pharmacies, onViewPharmacy }: any) => {
     const [q, setQ] = useState('');
-    const [viewFilter, setViewFilter] = useState<'ALL' | 'OPEN' | 'DELIVERY'>('ALL');
-    const openCount = pharmacies.filter((p: Pharmacy) => p.isAvailable).length;
-    const deliveryCount = pharmacies.filter((p: Pharmacy) => p.deliveryActive).length;
-
     const filtered = pharmacies
         .filter((p: Pharmacy) => normalizeText(p.name).includes(normalizeText(q)))
-        .filter((p: Pharmacy) => {
-            if (viewFilter === 'OPEN') return p.isAvailable;
-            if (viewFilter === 'DELIVERY') return p.deliveryActive;
-            return true;
-        })
         .sort((a: any, b: any) => {
             if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
-            if (a.deliveryActive !== b.deliveryActive) return a.deliveryActive ? -1 : 1;
-            if (typeof a.distanceKm === 'number' && typeof b.distanceKm === 'number') return a.distanceKm - b.distanceKm;
-            return (b.review_score || b.rating || 0) - (a.review_score || a.rating || 0);
+            if (a.distanceKm && b.distanceKm) return a.distanceKm - b.distanceKm;
+            return (b.review_score || 0) - (a.review_score || 0);
         });
 
     return (
-        <div className="space-y-6 animate-fade-in pb-20">
+        <div className="space-y-8 animate-fade-in pb-20">
             <h1 className="text-3xl font-black text-gray-800">Farmácias Parceiras</h1>
             <div className="bg-white p-2 rounded-2xl border shadow-sm flex items-center gap-3 max-w-xl">
                 <Search className="text-gray-300 ml-4" size={20}/>
                 <input placeholder="Pesquisar farmácia..." className="w-full py-4 outline-none font-bold text-gray-700" value={q} onChange={e => setQ(e.target.value)}/>
             </div>
-            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                <button
-                    onClick={() => setViewFilter('ALL')}
-                    className={`px-4 py-2 rounded-full text-[11px] font-black whitespace-nowrap transition-all ${viewFilter === 'ALL' ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-500'}`}
-                >
-                    Todas ({pharmacies.length})
-                </button>
-                <button
-                    onClick={() => setViewFilter('OPEN')}
-                    className={`px-4 py-2 rounded-full text-[11px] font-black whitespace-nowrap transition-all ${viewFilter === 'OPEN' ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-500'}`}
-                >
-                    Abertas ({openCount})
-                </button>
-                <button
-                    onClick={() => setViewFilter('DELIVERY')}
-                    className={`px-4 py-2 rounded-full text-[11px] font-black whitespace-nowrap transition-all ${viewFilter === 'DELIVERY' ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-500'}`}
-                >
-                    Com entrega ({deliveryCount})
-                </button>
-            </div>
-            <div className="space-y-4 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-6 md:space-y-0">
+            <div className="grid md:grid-cols-3 gap-6">
                 {filtered.map((p: Pharmacy) => (
-                    <div key={p.id} onClick={() => onViewPharmacy(p.id)} className="bg-white p-5 rounded-[28px] border hover:shadow-2xl cursor-pointer transition-all group">
-                        <div className="flex gap-4 items-start">
-                            <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-center font-black text-xl shrink-0">{p.name.charAt(0)}</div>
-                            <div className="min-w-0 flex-1">
-                                <div className="flex justify-between items-start gap-2">
-                                    <h3 className="text-base md:text-lg font-black text-gray-800 leading-tight line-clamp-2">{p.name}</h3>
-                                    {typeof p.distanceKm === 'number' && (
-                                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 rounded-full shrink-0">
-                                            {formatDistance(p.distanceKm)}
-                                        </span>
-                                    )}
-                                </div>
-                                <p className="text-xs text-gray-500 font-semibold mt-2 line-clamp-2">{p.address}</p>
-                                <div className="flex flex-wrap gap-2 mt-3">
-                                    <Badge color={p.isAvailable ? 'green' : 'gray'}>{p.isAvailable ? 'Loja Aberta' : 'Loja Fechada'}</Badge>
-                                    <Badge color={p.deliveryActive ? 'blue' : 'gray'} className="!text-[9px]">
-                                        {p.deliveryActive ? 'Faz Entrega' : 'Apenas Levantamento'}
-                                    </Badge>
-                                </div>
+                    <div key={p.id} onClick={() => onViewPharmacy(p.id)} className="bg-white p-6 rounded-[32px] border hover:shadow-2xl cursor-pointer transition-all group">
+                        <div className="flex justify-between items-start mb-6">
+                            <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-center font-black text-xl">{p.name.charAt(0)}</div>
+                            <div className="flex flex-col items-end gap-1">
+                                <Badge color={p.isAvailable ? 'green' : 'gray'}>{p.isAvailable ? 'Loja Aberta' : 'Loja Fechada'}</Badge>
+                                <Badge color={p.deliveryActive ? 'blue' : 'gray'} className="!text-[8px]">
+                                    {p.deliveryActive ? 'Entregas Disponíveis' : 'Apenas Levantamento'}
+                                </Badge>
+                                {p.distanceKm && <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 rounded-full">A {formatDistance(p.distanceKm)} de si</span>}
                             </div>
                         </div>
-                        <div className="flex justify-between items-center pt-4 mt-4 border-t font-black">
+                        <h3 className="text-xl font-black text-gray-800 mb-2">{p.name}</h3>
+                        <p className="text-xs text-gray-400 font-bold mb-6 truncate">{p.address}</p>
+                        <div className="flex justify-between items-center pt-6 border-t font-black">
                             <div className="flex flex-col">
                                 <span className="text-[10px] text-gray-400 uppercase">Taxa de Entrega</span>
                                 <span className={p.deliveryActive ? "text-emerald-600" : "text-gray-300 line-through"}>
                                     Kz {p.deliveryFee.toLocaleString()}
                                 </span>
                             </div>
-                            <ChevronRight className="text-gray-300 group-hover:text-emerald-600"/>
+                            <ChevronRight className="text-gray-200 group-hover:text-emerald-600"/>
                         </div>
                     </div>
                 ))}
@@ -388,241 +350,142 @@ export const PharmacyProfileView = ({ pharmacy, onAddToCart, onBack }: { pharmac
 };
 
 export const CartView = ({ items, pharmacies, updateQuantity, onCheckout, userAddress, onBack }: any) => {
-    const [type, setType] = useState<'DELIVERY' | 'PICKUP'>(() => userAddress?.trim() ? 'DELIVERY' : 'PICKUP');
+    const [type, setType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentAddress, setCurrentAddress] = useState(userAddress || '');
     const [isLocating, setIsLocating] = useState(false);
-    const [addressError, setAddressError] = useState<string | null>(null);
 
     const sub = items.reduce((a: any, b: any) => a + (b.price * b.quantity), 0);
-    const pharm = items.length > 0 ? pharmacies.find((p: any) => p.id === items[0].pharmacyId) : null;
+    const pharm = items.length > 0 ? pharmacies.find((p:any) => p.id === items[0].pharmacyId) : null;
     const fee = type === 'DELIVERY' ? (pharm?.deliveryFee || 0) : 0;
     const total = sub + fee;
 
-    // Se a farmacia nao suportar entrega, forcamos PICKUP.
+    // Se a farmácia não suportar entrega, forçamos o tipo PICKUP
     useEffect(() => {
         if (pharm && !pharm.deliveryActive && type === 'DELIVERY') {
             setType('PICKUP');
         }
     }, [pharm, type]);
 
-    useEffect(() => {
-        if (type !== 'DELIVERY' || currentAddress.trim()) {
-            setAddressError(null);
-        }
-    }, [type, currentAddress]);
-
     const handleUseGps = async () => {
         setIsLocating(true);
         playSound('click');
-
         const pos = await getCurrentPosition();
         if (pos) {
-            const lat = pos.lat.toFixed(6);
-            const lng = pos.lng.toFixed(6);
-            const mapUrl = `https://maps.google.com/?q=${lat},${lng}`;
-            const accuracyLine = typeof pos.accuracy === 'number'
-                ? `Precisao GPS ~${Math.round(pos.accuracy)}m`
-                : 'Precisao GPS indisponivel';
-
-            setCurrentAddress(`${accuracyLine}\nGPS: ${lat}, ${lng}\nMapa: ${mapUrl}`);
-            setAddressError(null);
-
-            if (typeof pos.accuracy === 'number' && pos.accuracy > 150) {
-                alert('GPS com baixa precisao. Confira no mapa e ajuste a morada manualmente.');
-            }
-
+            setCurrentAddress(`Coordenadas: ${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)} (Minha localização atual)`);
             playSound('success');
         } else {
-            setAddressError('Nao foi possivel obter a localizacao automatica. Preencha manualmente.');
-            alert('Nao foi possivel aceder ao GPS. Verifique as permissoes.');
+            alert("Não foi possível aceder ao GPS. Verifique as permissões.");
         }
-
         setIsLocating(false);
     };
 
-    const handleConfirmCheckout = async () => {
-        if (isProcessing) return;
-
-        const trimmedAddress = currentAddress.trim();
-        if (type === 'DELIVERY' && !trimmedAddress) {
-            setAddressError('Adicione a localizacao de entrega para continuar.');
-            playSound('error');
+    const handleConfirmCheckout = async () => { 
+        if (isProcessing) return; 
+        if (type === 'DELIVERY' && !currentAddress) {
+            alert("Por favor, insira a morada de entrega.");
             return;
         }
-
-        setAddressError(null);
-        setIsProcessing(true);
-
-        try {
-            await onCheckout(type, trimmedAddress, total);
-        } finally {
-            setIsProcessing(false);
-        }
+        setIsProcessing(true); 
+        try { 
+            await onCheckout(type, currentAddress, total); 
+        } finally { 
+            setIsProcessing(false); 
+        } 
     };
-
-    const deliveryMissingAddress = type === 'DELIVERY' && !currentAddress.trim();
 
     return (
         <div className="max-w-4xl mx-auto py-10 animate-fade-in pb-32">
-            <button onClick={onBack} className="text-gray-400 font-black text-xs uppercase mb-6 flex items-center gap-2" disabled={isProcessing}>
-                <ArrowLeft size={16} /> Ver mais medicamentos
-            </button>
+            <button onClick={onBack} className="text-gray-400 font-black text-xs uppercase mb-6 flex items-center gap-2" disabled={isProcessing}><ArrowLeft size={16}/> Ver mais medicamentos</button>
             <h2 className="text-3xl font-black text-gray-800 mb-8">Finalizar Pedido</h2>
-
+            
             {items.length === 0 ? (
                 <div className="bg-white p-20 rounded-[40px] border border-dashed text-center flex flex-col items-center">
-                    <Store className="text-gray-100 mb-4" size={80} />
-                    <p className="text-gray-400 font-black uppercase text-sm">O cesto esta vazio</p>
+                    <Store className="text-gray-100 mb-4" size={80}/>
+                    <p className="text-gray-400 font-black uppercase text-sm">O cesto está vazio</p>
                 </div>
             ) : (
                 <div className="grid lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-6">
                         <div className="bg-emerald-50 p-6 rounded-[32px] border border-emerald-100 flex items-center gap-4">
-                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-emerald-600 shadow-sm">
-                                <Store />
-                            </div>
+                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-emerald-600 shadow-sm"><Store/></div>
                             <div>
                                 <h3 className="font-black text-xl text-emerald-900">{pharm?.name}</h3>
                                 <p className="text-[10px] text-emerald-600 font-bold uppercase">
-                                    {pharm?.deliveryActive ? `Entrega em ${pharm?.minTime}` : 'Apenas levantamento em loja'}
+                                    {pharm?.deliveryActive ? `Entrega em ${pharm?.minTime}` : 'Apenas Levantamento em Loja'}
                                 </p>
                             </div>
                         </div>
+
+                        {type === 'DELIVERY' && (
+                            <Card className="p-8 rounded-[40px] shadow-sm border-gray-100">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h4 className="text-sm font-black text-gray-800 uppercase tracking-widest flex items-center gap-2"><MapPin size={18} className="text-emerald-500"/> Local de Entrega</h4>
+                                    <button 
+                                        onClick={handleUseGps} 
+                                        disabled={isLocating}
+                                        className="text-[10px] font-black text-blue-600 uppercase flex items-center gap-1 bg-blue-50 px-3 py-2 rounded-xl hover:bg-blue-100 transition-all"
+                                    >
+                                        {isLocating ? <Loader2 className="animate-spin" size={12}/> : <Navigation size={12}/>}
+                                        {isLocating ? 'Obtendo...' : 'Usar GPS'}
+                                    </button>
+                                </div>
+                                <textarea 
+                                    className="w-full p-4 bg-gray-50 border rounded-2xl outline-none focus:ring-4 focus:ring-emerald-50 font-medium text-sm transition-all min-h-[100px]" 
+                                    placeholder="Descreva sua morada completa (Província, Município, Bairro...)"
+                                    value={currentAddress}
+                                    onChange={e => setCurrentAddress(e.target.value)}
+                                />
+                            </Card>
+                        )}
 
                         <div className="space-y-4">
                             {items.map((it: any) => (
                                 <div key={it.id} className="bg-white p-5 rounded-3xl border flex items-center gap-4 shadow-sm">
                                     <img src={optimizeImg(it.image)} className="w-16 h-16 object-contain rounded-xl bg-gray-50 p-2" loading="lazy" alt={it.name} />
-                                    <div className="flex-1">
-                                        <h4 className="font-bold text-gray-800 text-sm">{formatProductNameForCustomer(it.name)}</h4>
-                                        <p className="text-emerald-600 font-black">Kz {(it.price * it.quantity).toLocaleString()}</p>
-                                    </div>
-                                    <div className="flex flex-col items-end gap-2">
-                                        <button
-                                            disabled={isProcessing}
-                                            onClick={() => updateQuantity(it.id, 0)}
-                                            className="h-8 px-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-1 hover:bg-red-100 transition-colors"
-                                            title="Remover item"
-                                        >
-                                            <Trash2 size={12} />
-                                            Remover
-                                        </button>
-                                        <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border">
-                                            <button disabled={isProcessing} onClick={() => updateQuantity(it.id, -1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">-</button>
-                                            <span className="font-black min-w-[20px] text-center">{it.quantity}</span>
-                                            <button disabled={isProcessing} onClick={() => updateQuantity(it.id, 1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">+</button>
-                                        </div>
+                                    <div className="flex-1"><h4 className="font-bold text-gray-800 text-sm">{formatProductNameForCustomer(it.name)}</h4><p className="text-emerald-600 font-black">Kz {(it.price * it.quantity).toLocaleString()}</p></div>
+                                    <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border">
+                                        <button disabled={isProcessing} onClick={() => updateQuantity(it.id, -1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">-</button>
+                                        <span className="font-black">{it.quantity}</span>
+                                        <button disabled={isProcessing} onClick={() => updateQuantity(it.id, 1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">+</button>
                                     </div>
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    <div className="bg-emerald-900 text-white p-8 rounded-[40px] shadow-2xl space-y-6 h-fit lg:sticky lg:top-24">
+                    <div className="bg-emerald-900 text-white p-8 rounded-[40px] shadow-2xl space-y-6 h-fit sticky top-24">
                         <h3 className="font-black text-xl border-b border-white/10 pb-4">Resumo da Compra</h3>
-
                         <div className="flex gap-2 p-1 bg-white/10 rounded-2xl">
-                            <button
-                                onClick={() => setType('DELIVERY')}
+                            <button 
+                                onClick={() => setType('DELIVERY')} 
                                 disabled={!pharm?.deliveryActive}
                                 className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${!pharm?.deliveryActive ? 'opacity-30 cursor-not-allowed' : (type === 'DELIVERY' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent')}`}
                             >
-                                Receber em Casa
+                                Entrega
                             </button>
-                            <button
-                                onClick={() => setType('PICKUP')}
-                                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${type === 'PICKUP' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent'}`}
-                            >
-                                Levantar na Farmacia
-                            </button>
+                            <button onClick={() => setType('PICKUP')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${type === 'PICKUP' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent'}`}>Levantamento</button>
                         </div>
-
-                        <p className="text-[10px] text-emerald-200 font-bold uppercase tracking-wide">
-                            {type === 'DELIVERY'
-                                ? 'Entrega ao domicilio selecionada. Informe a localizacao abaixo.'
-                                : 'Levantamento em loja selecionado. Nao precisa adicionar morada.'}
-                        </p>
-
-                        {type === 'DELIVERY' && (
-                            <div className="bg-white/10 p-4 rounded-2xl border border-white/15 space-y-3">
-                                <div className="flex items-center justify-between gap-2">
-                                    <h4 className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2">
-                                        <MapPin size={14} className="text-emerald-300" /> Local de Entrega
-                                    </h4>
-                                    <button
-                                        onClick={handleUseGps}
-                                        disabled={isLocating}
-                                        className="text-[10px] font-black text-blue-50 uppercase flex items-center gap-1 bg-blue-600/80 px-3 py-2 rounded-xl hover:bg-blue-500 transition-all"
-                                    >
-                                        {isLocating ? <Loader2 className="animate-spin" size={12} /> : <Navigation size={12} />}
-                                        {isLocating ? 'Obtendo...' : 'Usar GPS'}
-                                    </button>
-                                </div>
-
-                                <textarea
-                                    className="w-full p-3 bg-white text-gray-800 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-200 font-semibold text-xs transition-all min-h-[92px]"
-                                    placeholder="Ex: Provincia, Municipio, Bairro, rua e ponto de referencia"
-                                    value={currentAddress}
-                                    onChange={e => setCurrentAddress(e.target.value)}
-                                />
-
-                                {addressError && (
-                                    <div className="bg-amber-500/20 border border-amber-400/40 rounded-xl px-3 py-2 text-[10px] font-black text-amber-100 uppercase tracking-wide">
-                                        {addressError}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {type === 'PICKUP' && (
-                            <div className="bg-blue-500/15 p-4 rounded-2xl border border-blue-400/30">
-                                <p className="text-[10px] font-black text-blue-100 uppercase tracking-wide">
-                                    Levantar em: {pharm?.address || 'Morada da farmacia indisponivel'}
-                                </p>
-                                {pharm?.phone && (
-                                    <p className="text-[10px] font-bold text-blue-200 mt-1 uppercase tracking-wide">
-                                        Contacto: {pharm.phone}
-                                    </p>
-                                )}
-                            </div>
-                        )}
-
+                        
                         {!pharm?.deliveryActive && (
                             <div className="bg-orange-500/20 p-4 rounded-2xl border border-orange-500/30 flex items-start gap-3">
                                 <AlertCircle size={18} className="text-orange-400 shrink-0 mt-0.5" />
-                                <p className="text-[10px] font-bold text-orange-200 leading-tight">
-                                    Esta farmacia desativou temporariamente o servico de entregas. Por favor, levante o seu pedido na loja.
-                                </p>
+                                <p className="text-[10px] font-bold text-orange-200 leading-tight">Esta farmácia desativou temporariamente o serviço de entregas. Por favor, levante o seu pedido na loja.</p>
                             </div>
                         )}
 
                         <div className="space-y-2 pt-4">
-                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold">
-                                <span>Medicamentos ({items.length})</span>
-                                <span>Kz {sub.toLocaleString()}</span>
-                            </div>
-                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold">
-                                <span>{type === 'DELIVERY' ? 'Taxa de Entrega' : 'Levantamento na Farmacia'}</span>
-                                <span>{type === 'DELIVERY' ? `Kz ${fee.toLocaleString()}` : 'Gratis'}</span>
-                            </div>
-                            <div className="flex justify-between items-center pt-6 text-3xl font-black border-t border-white/10">
-                                <span>Total</span>
-                                <span>Kz {total.toLocaleString()}</span>
-                            </div>
+                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold"><span>Medicamentos ({items.length})</span><span>Kz {sub.toLocaleString()}</span></div>
+                            <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold"><span>Taxa de Entrega</span><span>Kz {fee.toLocaleString()}</span></div>
+                            <div className="flex justify-between items-center pt-6 text-3xl font-black border-t border-white/10"><span>Total</span><span>Kz {total.toLocaleString()}</span></div>
                         </div>
-
-                        <Button onClick={handleConfirmCheckout} disabled={isProcessing} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 rounded-[24px] font-black text-xl shadow-2xl shadow-emerald-500/20 active:scale-95 transition-all">
-                            {isProcessing ? <Loader2 className="animate-spin" /> : (deliveryMissingAddress ? 'Adicionar Localizacao' : 'Confirmar Pedido')}
+                        <Button onClick={handleConfirmCheckout} disabled={isProcessing || (type === 'DELIVERY' && !currentAddress)} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 rounded-[24px] font-black text-xl shadow-2xl shadow-emerald-500/20 active:scale-95 transition-all">
+                            {isProcessing ? <Loader2 className="animate-spin" /> : "Confirmar Pedido"}
                         </Button>
-
-                        <p className="text-[9px] text-center text-emerald-400 font-bold uppercase tracking-widest opacity-60">
-                            {type === 'DELIVERY' ? 'Pagamento no ato da entrega' : 'Pagamento no ato do levantamento'}
-                        </p>
+                        <p className="text-[9px] text-center text-emerald-400 font-bold uppercase tracking-widest opacity-60">Pagamento no ato da entrega</p>
                     </div>
                 </div>
             )}
         </div>
     );
 };
-

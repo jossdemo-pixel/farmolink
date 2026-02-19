@@ -70,9 +70,7 @@ export const fetchPharmacies = async (isAdmin: boolean = false): Promise<Pharmac
     description: p.description,
     openingHours: p.opening_hours,
     paymentMethods: Array.isArray(p.payment_methods) ? p.payment_methods : [],
-    instagram: p.instagram,
-    latitude: Number.isFinite(Number(p.latitude)) ? Number(p.latitude) : undefined,
-    longitude: Number.isFinite(Number(p.longitude)) ? Number(p.longitude) : undefined
+    instagram: p.instagram
   }));
 };
 
@@ -102,9 +100,7 @@ export const fetchPharmacyById = async (id: string): Promise<Pharmacy | null> =>
     description: data.description,
     openingHours: data.opening_hours,
     paymentMethods: Array.isArray(data.payment_methods) ? data.payment_methods : [],
-    instagram: data.instagram,
-    latitude: Number.isFinite(Number(data.latitude)) ? Number(data.latitude) : undefined,
-    longitude: Number.isFinite(Number(data.longitude)) ? Number(data.longitude) : undefined
+    instagram: data.instagram
   };
 };
 

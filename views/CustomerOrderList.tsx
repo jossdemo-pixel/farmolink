@@ -76,7 +76,7 @@ const OrderTimeline = ({ status, type }: { status: string, type: 'DELIVERY' | 'P
 export const CustomerOrdersView = ({
     orders, pharmacies, customerId, onRefresh, onAddToCart, onNavigate
 }: {
-    orders: Order[], pharmacies: Pharmacy[], customerId?: string, onRefresh: () => void, onAddToCart: (p: Product) => void, onNavigate: (page: string) => void
+    orders: Order[], pharmacies: Pharmacy[], customerId?: string, onRefresh: () => void, onAddToCart: (p: Product, options?: { quantity?: number; askQuantity?: boolean }) => void, onNavigate: (page: string) => void
 }) => {
     const [expandedOrder, setExpandedOrder] = React.useState<string | null>(null);
 
@@ -101,13 +101,13 @@ export const CustomerOrdersView = ({
     const handleReorder = (order: Order) => {
         if (!confirm("Adicionar todos os itens deste pedido ao carrinho?")) return;
         
-        // Adiciona cada item do pedido ao carrinho
+        // Adiciona cada item com a quantidade original, sem abrir modal em lote
         order.items.forEach(item => {
             onAddToCart({
                 ...item,
-                // Garante que o stock não seja impeditivo na UI inicial, o CartView vai validar depois se necessário
-                // Mas mantemos a lógica de produto válida
-            });
+                // Garante que o stock nao seja impeditivo na UI inicial, o CartView vai validar depois se necessario
+                // Mas mantemos a logica de produto valida
+            }, { quantity: item.quantity, askQuantity: false });
         });
         
         playSound('success');
@@ -140,7 +140,7 @@ export const CustomerOrdersView = ({
                         const isRecent = new Date(order.date).getTime() > Date.now() - 24 * 60 * 60 * 1000; // Últimas 24h
 
                         return (
-                            <Card key={order.id} className={`p-6 rounded-[32px] border-gray-100 shadow-sm hover:shadow-md transition-all ${isRecent && order.status !== 'Concluído' ? 'border-l-8 border-l-emerald-500' : ''}`}>
+                            <Card key={order.id} className={`p-6 rounded-[32px] border-gray-100 shadow-sm hover:shadow-md transition-all ${isRecent && order.status !== OrderStatus.COMPLETED ? 'border-l-8 border-l-emerald-500' : ''}`}>
                                 <div className="flex flex-col gap-6">
                                     {/* CABEÇALHO DO PEDIDO */}
                                     <div className="flex flex-col md:flex-row justify-between gap-4">
