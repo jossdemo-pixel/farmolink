@@ -13,11 +13,9 @@ import { fetchOrders, fetchPrescriptionRequests, createOrder } from './services/
 import { getCacheForUser, getLastSyncForUser, setCacheForUser } from './services/dataService';
 import { playSound } from './services/soundService';
 import { getCurrentPosition, calculateDistance } from './services/locationService';
-import { Wifi, WifiOff, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info } from 'lucide-react';
+import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
 import { SUPABASE_URL } from './services/supabaseClient';
-import { BotActionEvent } from './services/geminiService';
-import { executeBotAction } from './services/botActionRouter';
 
 // --- Static View Imports ---
 import { HomeView, AllPharmaciesView, CartView, PharmacyProfileView } from './views/CustomerShop'; // NOVA VIEW
@@ -41,6 +39,11 @@ import { AdminSettingsView, AdminBackupView } from './views/AdminSystem';
 import { AdminSupportView } from './views/AdminSupport';
 import { AboutView, FAQView, TermsOfUseView, PrivacyPolicyView } from './views/PublicInfoViews';
 
+type ConnectivityNoticeState = {
+    status: 'offline' | 'online';
+    message: string;
+};
+
 export const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
     const [page, setPage] = useState('home');
@@ -50,11 +53,11 @@ export const App: React.FC = () => {
     const [showExitHint, setShowExitHint] = useState(false);
     const [networkError, setNetworkError] = useState<string | null>(null);
     const [isOffline, setIsOffline] = useState<boolean>(isOfflineNow());
+    const [connectivityNotice, setConnectivityNotice] = useState<ConnectivityNoticeState | null>(null);
     const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
     const [syncNotice, setSyncNotice] = useState<string | null>(null);
-    const [connectionToast, setConnectionToast] = useState<{ type: 'offline' | 'online'; message: string } | null>(null);
     const isSyncingQueueRef = useRef(false);
-    const connectionToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const connectivityNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
     const [products, setProducts] = useState<Product[]>([]);
     const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
@@ -124,6 +127,31 @@ export const App: React.FC = () => {
             // Ignora parse failures de URL.
         }
     }, [isPasswordRecoveryFlow]);
+
+    const showConnectivityNotice = useCallback((status: 'offline' | 'online') => {
+        const message = status === 'offline'
+            ? 'Está offline.'
+            : 'Conexão está online.';
+
+        setConnectivityNotice({ status, message });
+
+        if (connectivityNoticeTimerRef.current) {
+            clearTimeout(connectivityNoticeTimerRef.current);
+        }
+
+        connectivityNoticeTimerRef.current = setTimeout(() => {
+            setConnectivityNotice(null);
+            connectivityNoticeTimerRef.current = null;
+        }, 4200);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (connectivityNoticeTimerRef.current) {
+                clearTimeout(connectivityNoticeTimerRef.current);
+            }
+        };
+    }, []);
     
     const syncOfflineQueue = useCallback(async () => {
         if (isSyncingQueueRef.current || !navigator.onLine) return;
@@ -146,34 +174,13 @@ export const App: React.FC = () => {
         }
     }, []);
 
-    const showConnectionToast = useCallback((type: 'offline' | 'online', message: string) => {
-        setConnectionToast({ type, message });
-        if (connectionToastTimeoutRef.current) {
-            clearTimeout(connectionToastTimeoutRef.current);
-        }
-        connectionToastTimeoutRef.current = setTimeout(() => {
-            setConnectionToast(null);
-        }, 4500);
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            if (connectionToastTimeoutRef.current) {
-                clearTimeout(connectionToastTimeoutRef.current);
-            }
-        };
-    }, []);
-
     const refreshConnectivity = useCallback(async () => {
         const reachable = await probeInternet();
         const nextOffline = !reachable;
 
-        setIsOffline(prev => {
-            if (prev !== nextOffline) {
-                showConnectionToast(
-                    nextOffline ? 'offline' : 'online',
-                    nextOffline ? 'Voce esta offline.' : 'Voce esta online novamente.'
-                );
+        setIsOffline(prevOffline => {
+            if (prevOffline !== nextOffline) {
+                showConnectivityNotice(nextOffline ? 'offline' : 'online');
             }
             return nextOffline;
         });
@@ -182,7 +189,7 @@ export const App: React.FC = () => {
             setNetworkError(null);
             await syncOfflineQueue();
         }
-    }, [probeInternet, showConnectionToast, syncOfflineQueue]);
+    }, [probeInternet, showConnectivityNotice, syncOfflineQueue]);
 
     // --- Detector de erros de rede + sincronizacao offline ---
     useEffect(() => {
@@ -191,9 +198,9 @@ export const App: React.FC = () => {
         };
 
         const handleOffline = () => {
-            setIsOffline(prev => {
-                if (!prev) {
-                    showConnectionToast('offline', 'Voce esta offline.');
+            setIsOffline(prevOffline => {
+                if (!prevOffline) {
+                    showConnectivityNotice('offline');
                 }
                 return true;
             });
@@ -219,7 +226,7 @@ export const App: React.FC = () => {
             document.removeEventListener('visibilitychange', handleVisibility);
             clearInterval(timer);
         };
-    }, [refreshConnectivity]);
+    }, [refreshConnectivity, showConnectivityNotice]);
 
     // --- Back Button Logic - Melhorado para APK com Capacitor ---
     useEffect(() => {
@@ -324,14 +331,12 @@ export const App: React.FC = () => {
 
     const updateDistances = useCallback((coords: {lat: number, lng: number}, phList: Pharmacy[]) => {
         return phList.map(ph => {
-            const hasLat = typeof ph.latitude === 'number' && Number.isFinite(ph.latitude);
-            const hasLng = typeof ph.longitude === 'number' && Number.isFinite(ph.longitude);
-            if (hasLat && hasLng) {
-                const dist = calculateDistance(coords.lat, coords.lng, ph.latitude!, ph.longitude!);
+            if (ph.latitude && ph.longitude) {
+                const dist = calculateDistance(coords.lat, coords.lng, ph.latitude, ph.longitude);
                 return { ...ph, distanceKm: dist };
             }
             return ph;
-        }).sort((a, b) => (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY));
+        }).sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
     }, []);
 
     const loadData = useCallback(async (currUser: User) => {
@@ -524,24 +529,10 @@ export const App: React.FC = () => {
         });
     };
 
-    const handleBotAction = useCallback((action: BotActionEvent) => {
-        executeBotAction(action, {
-            navigate: (nextPage) => setPage(nextPage),
-            addToCart: handleAddToCart,
-            setActivePharmacyId: (id) => setActivePharmacyId(id),
-            products,
-            notify: (message) => {
-                setSyncNotice(message);
-                setTimeout(() => setSyncNotice(null), 3500);
-            }
-        });
-    }, [products, handleAddToCart]);
-
     const updateCartQuantity = (id: string, delta: number) => {
         setCart(prev => {
             const updated = prev.map(item => {
                 if (item.id !== id) return item;
-                if (delta === 0) return { ...item, quantity: 0 };
                 const maxStock = typeof item.stock === 'number' ? item.stock : Infinity;
                 const nextQty = item.quantity + delta;
 
@@ -561,7 +552,7 @@ export const App: React.FC = () => {
     const handleCheckout = async (type: 'DELIVERY' | 'PICKUP', address: string, total: number) => {
         if (!user || cart.length === 0) return;
         if (!navigator.onLine) {
-            setNetworkError('Sem internet. Checkout indisponivel offline.');
+            showConnectivityNotice('offline');
             return;
         }
 
@@ -761,15 +752,19 @@ export const App: React.FC = () => {
                 </div>
             )}
 
-            {connectionToast && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10001] pointer-events-none">
-                    <div className={`backdrop-blur-md px-5 py-2 rounded-full border shadow-2xl text-xs font-black uppercase tracking-wide flex items-center gap-2 ${
-                        connectionToast.type === 'offline'
-                            ? 'bg-amber-900/90 text-amber-50 border-amber-400/40'
-                            : 'bg-emerald-900/90 text-emerald-50 border-emerald-400/40'
+            {connectivityNotice && (
+                <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[10001] animate-fade-in pointer-events-none">
+                    <div className={`backdrop-blur-md px-4 py-2 rounded-full text-xs font-bold shadow-xl border flex items-center gap-2 ${
+                        connectivityNotice.status === 'offline'
+                            ? 'bg-amber-600/95 text-white border-amber-400/50'
+                            : 'bg-emerald-600/95 text-white border-emerald-300/50'
                     }`}>
-                        {connectionToast.type === 'offline' ? <WifiOff size={14} className="shrink-0" /> : <Wifi size={14} className="shrink-0" />}
-                        <span>{connectionToast.message}</span>
+                        {connectivityNotice.status === 'offline' ? (
+                            <WifiOff size={14} className="shrink-0" />
+                        ) : (
+                            <Wifi size={14} className="shrink-0" />
+                        )}
+                        {connectivityNotice.message}
                     </div>
                 </div>
             )}
@@ -789,9 +784,7 @@ export const App: React.FC = () => {
                     menuItems={getMenuItems()} cartCount={cart.reduce((a, b) => a + b.quantity, 0)}
                 >
                     {renderContent()}
-                    {user.role === UserRole.CUSTOMER && (
-                        <ChatBot onAction={handleBotAction} preferredPharmacyId={activePharmacyId} />
-                    )}
+                    {user.role === UserRole.CUSTOMER && <ChatBot />}
                 </MainLayout>
             ) : (
                 renderContent()
