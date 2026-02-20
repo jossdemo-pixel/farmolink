@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Card, Button, Toast, Badge, NumericInput } from '../components/UI';
-import { generateFullSystemBackup, restoreFullSystemBackup, sendSystemNotification, RestoreOptions, fetchAllAdminBanners, saveAllAdminBanners, saveAdminBanner, deleteAdminBanner, fetchAdminFaq, saveAdminFaq, fetchAdminAbout, saveAdminAbout, fetchAllCarouselSlides, saveAllCarouselSlides, saveCarouselSlide, fetchLegalContent, saveLegalContent, DEFAULT_PRIVACY_POLICY_TEXT, DEFAULT_TERMS_OF_USE_TEXT, DEFAULT_LEGAL_UPDATED_AT } from '../services/dataService';
+import { generateFullSystemBackup, restoreFullSystemBackup, sendSystemNotification, sendSystemNotificationToUser, fetchNotificationRecipients, NotificationRecipient, RestoreOptions, fetchAllAdminBanners, saveAllAdminBanners, saveAdminBanner, deleteAdminBanner, fetchAdminFaq, saveAdminFaq, fetchAdminAbout, saveAdminAbout, fetchAllCarouselSlides, saveAllCarouselSlides, saveCarouselSlide, fetchLegalContent, saveLegalContent, DEFAULT_PRIVACY_POLICY_TEXT, DEFAULT_TERMS_OF_USE_TEXT, DEFAULT_LEGAL_UPDATED_AT } from '../services/dataService';
 import { 
     Settings, Save, Megaphone, ShieldCheck, Download, 
     UploadCloud, X, CheckCircle2, AlertTriangle, Database, 
@@ -27,6 +27,10 @@ export const AdminSettingsView = () => {
     // Configurações de Rede
     const [config, setConfig] = useState({ commissionRate: 10, minOrderValue: 2000, supportWhatsapp: '244923123456', supportEmail: 'ajuda@farmolink.ao' });
     const [broadcast, setBroadcast] = useState({ title: '', message: '', target: 'ALL' as 'ALL' | 'CUSTOMER' | 'PHARMACY' });
+    const [broadcastMode, setBroadcastMode] = useState<'GLOBAL' | 'INDIVIDUAL'>('GLOBAL');
+    const [recipientRoleFilter, setRecipientRoleFilter] = useState<'CUSTOMER' | 'PHARMACY' | 'ADMIN'>('CUSTOMER');
+    const [recipientOptions, setRecipientOptions] = useState<NotificationRecipient[]>([]);
+    const [selectedRecipientId, setSelectedRecipientId] = useState<string>('');
 
     // Sobre Nós
     const [aboutData, setAboutData] = useState({
@@ -99,6 +103,15 @@ export const AdminSettingsView = () => {
 
         loadData();
     }, []);
+
+    useEffect(() => {
+        const loadRecipients = async () => {
+            const users = await fetchNotificationRecipients(recipientRoleFilter);
+            setRecipientOptions(users);
+            setSelectedRecipientId(prev => (users.some(u => u.id === prev) ? prev : ''));
+        };
+        loadRecipients();
+    }, [recipientRoleFilter]);
 
     const handleSaveConfig = () => {
         setLoading(true);
@@ -177,9 +190,22 @@ export const AdminSettingsView = () => {
     const handleSendBroadcast = async () => {
         if (!broadcast.title || !broadcast.message) return;
         setLoading(true);
-        const success = await sendSystemNotification(broadcast.target, broadcast.title, broadcast.message);
+        const success = broadcastMode === 'GLOBAL'
+            ? await sendSystemNotification(broadcast.target, broadcast.title, broadcast.message)
+            : await sendSystemNotificationToUser(
+                selectedRecipientId,
+                broadcast.title,
+                broadcast.message,
+                recipientRoleFilter === 'PHARMACY' ? 'pharmacy-orders' : (recipientRoleFilter === 'ADMIN' ? 'admin-dashboard' : 'home')
+            );
         setLoading(false);
-        if (success) { playSound('success'); setToast({msg: "Comunicado enviado!", type: 'success'}); setBroadcast({ ...broadcast, title: '', message: '' }); }
+        if (success) {
+            playSound('success');
+            setToast({msg: "Comunicado enviado!", type: 'success'});
+            setBroadcast({ ...broadcast, title: '', message: '' });
+        } else {
+            setToast({msg: "Falha ao enviar comunicado.", type: 'error'});
+        }
     };
 
     const addFaqItem = () => {
@@ -493,19 +519,59 @@ export const AdminSettingsView = () => {
                 <Card className="p-8 border-l-8 border-orange-500 shadow-lg">
                     <h3 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-6"><Megaphone className="text-orange-500"/> Enviar Comunicado Global</h3>
                     <div className="space-y-4">
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setBroadcastMode('GLOBAL')}
+                                className={`px-4 py-2 rounded-xl text-xs font-black ${broadcastMode === 'GLOBAL' ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-500'}`}
+                            >
+                                Global
+                            </button>
+                            <button
+                                onClick={() => setBroadcastMode('INDIVIDUAL')}
+                                className={`px-4 py-2 rounded-xl text-xs font-black ${broadcastMode === 'INDIVIDUAL' ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-500'}`}
+                            >
+                                Individual
+                            </button>
+                        </div>
                         <input className="w-full p-3 border rounded-xl font-bold" placeholder="Assunto..." value={broadcast.title} onChange={e => setBroadcast({...broadcast, title: e.target.value})}/>
                         <textarea className="w-full p-3 border rounded-xl h-24 text-sm" placeholder="Mensagem..." value={broadcast.message} onChange={e => setBroadcast({...broadcast, message: e.target.value})}/>
                         <div className="flex gap-2">
-                            <select 
-                                className="p-3 border rounded-xl text-xs font-bold bg-gray-50"
-                                value={broadcast.target}
-                                onChange={e => setBroadcast({...broadcast, target: e.target.value as any})}
-                            >
-                                <option value="ALL">Todos</option>
-                                <option value="CUSTOMER">Clientes</option>
-                                <option value="PHARMACY">Farmácias</option>
-                            </select>
-                            <Button className="flex-1 py-4 bg-orange-600 text-white" onClick={handleSendBroadcast} disabled={loading || !broadcast.title}>Enviar Notificação</Button>
+                            {broadcastMode === 'GLOBAL' ? (
+                                <select 
+                                    className="p-3 border rounded-xl text-xs font-bold bg-gray-50"
+                                    value={broadcast.target}
+                                    onChange={e => setBroadcast({...broadcast, target: e.target.value as any})}
+                                >
+                                    <option value="ALL">Todos</option>
+                                    <option value="CUSTOMER">Clientes</option>
+                                    <option value="PHARMACY">Farmácias</option>
+                                </select>
+                            ) : (
+                                <>
+                                    <select
+                                        className="p-3 border rounded-xl text-xs font-bold bg-gray-50"
+                                        value={recipientRoleFilter}
+                                        onChange={e => setRecipientRoleFilter(e.target.value as any)}
+                                    >
+                                        <option value="CUSTOMER">Clientes</option>
+                                        <option value="PHARMACY">Farmácias</option>
+                                        <option value="ADMIN">Admin</option>
+                                    </select>
+                                    <select
+                                        className="flex-1 p-3 border rounded-xl text-xs font-bold bg-gray-50"
+                                        value={selectedRecipientId}
+                                        onChange={e => setSelectedRecipientId(e.target.value)}
+                                    >
+                                        <option value="">Selecionar utilizador...</option>
+                                        {recipientOptions.map(u => (
+                                            <option key={u.id} value={u.id}>
+                                                {u.name} {u.email ? `(${u.email})` : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </>
+                            )}
+                            <Button className="flex-1 py-4 bg-orange-600 text-white" onClick={handleSendBroadcast} disabled={loading || !broadcast.title || !broadcast.message || (broadcastMode === 'INDIVIDUAL' && !selectedRecipientId)}>Enviar Notificação</Button>
                         </div>
                     </div>
                 </Card>
@@ -740,3 +806,4 @@ const RestoreOptionToggle = ({ label, count, icon, active, onClick }: any) => (
         </div>
     </div>
 );
+

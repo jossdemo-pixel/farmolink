@@ -7,6 +7,20 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+type ProfileRole = "ADMIN" | "PHARMACY" | "CUSTOMER";
+
+type DispatchPayload = {
+  title?: string;
+  message?: string;
+  type?: string;
+  page?: string;
+  target?: "ALL" | ProfileRole;
+  targetRole?: ProfileRole;
+  singleUserId?: string;
+  userIds?: string[];
+  persistNotification?: boolean;
+};
+
 const createAdminClient = () => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -81,23 +95,87 @@ const createGoogleAccessToken = async (
   return tokenJson?.access_token || null;
 };
 
-const isAdminUser = async (admin: any, userId: string): Promise<boolean> => {
-  if (!admin || !userId) return false;
-  const { data } = await admin
-    .from("profiles")
-    .select("id")
-    .eq("id", userId)
-    .eq("role", "ADMIN")
-    .maybeSingle();
-  return !!data?.id;
-};
-
 const getUserFromBearer = async (admin: any, authHeader: string) => {
   const token = (authHeader || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return null;
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data?.user?.id) return null;
   return data.user;
+};
+
+const normalizeUniqueIds = (ids: string[]): string[] =>
+  [...new Set(ids.map((v) => String(v || "").trim()).filter(Boolean))];
+
+const getActorProfile = async (admin: any, userId: string) => {
+  const { data } = await admin
+    .from("profiles")
+    .select("id, role, pharmacy_id")
+    .eq("id", userId)
+    .maybeSingle();
+  return data || null;
+};
+
+const resolveRecipients = async (admin: any, payload: DispatchPayload): Promise<string[]> => {
+  if (payload.singleUserId) return [payload.singleUserId];
+  if (Array.isArray(payload.userIds) && payload.userIds.length > 0) {
+    return normalizeUniqueIds(payload.userIds);
+  }
+
+  const target = (payload.target || payload.targetRole || "ALL") as "ALL" | ProfileRole;
+  let query = admin.from("profiles").select("id");
+  if (target !== "ALL") query = query.eq("role", target);
+
+  const { data } = await query.limit(2000);
+  return normalizeUniqueIds((data || []).map((row: any) => row.id));
+};
+
+const filterRecipientsForPharmacyActor = async (
+  admin: any,
+  pharmacyId: string,
+  recipients: string[],
+): Promise<string[]> => {
+  if (!pharmacyId || recipients.length === 0) return [];
+
+  const allowed = new Set<string>();
+
+  const { data: orderRows } = await admin
+    .from("orders")
+    .select("customer_id")
+    .eq("pharmacy_id", pharmacyId)
+    .in("customer_id", recipients);
+
+  for (const row of orderRows || []) {
+    if (row?.customer_id) allowed.add(String(row.customer_id));
+  }
+
+  const { data: rxRows } = await admin
+    .from("prescriptions")
+    .select("id, customer_id, target_pharmacies")
+    .in("customer_id", recipients);
+
+  const targetKey = String(pharmacyId);
+  for (const row of rxRows || []) {
+    const targets = Array.isArray(row?.target_pharmacies) ? row.target_pharmacies : [];
+    if (targets.includes(targetKey) && row?.customer_id) {
+      allowed.add(String(row.customer_id));
+    }
+  }
+
+  const { data: quoteRows } = await admin
+    .from("prescription_quotes")
+    .select("prescription_id")
+    .eq("pharmacy_id", pharmacyId);
+  const rxWithMyQuote = new Set<string>();
+  for (const row of quoteRows || []) {
+    if (row?.prescription_id) rxWithMyQuote.add(String(row.prescription_id));
+  }
+  for (const row of rxRows || []) {
+    if (row?.id && rxWithMyQuote.has(String(row.id)) && row?.customer_id) {
+      allowed.add(String(row.customer_id));
+    }
+  }
+
+  return recipients.filter((id) => allowed.has(id));
 };
 
 const sendToFcmToken = async (
@@ -121,7 +199,10 @@ const sendToFcmToken = async (
         data,
         android: {
           priority: "HIGH",
-          notification: { sound: "default" },
+          notification: {
+            sound: "default",
+            channel_id: "farmolink-important",
+          },
         },
       },
     }),
@@ -129,6 +210,16 @@ const sendToFcmToken = async (
 
   const json = await res.json().catch(() => ({}));
   return { ok: res.ok, json };
+};
+
+const shouldDeactivateToken = (fcmError: string): boolean => {
+  const normalized = String(fcmError || "").toUpperCase();
+  return (
+    normalized.includes("NOTREGISTERED") ||
+    normalized.includes("UNREGISTERED") ||
+    normalized.includes("INVALIDREGISTRATION") ||
+    normalized.includes("REQUESTED ENTITY WAS NOT FOUND")
+  );
 };
 
 serve(async (req) => {
@@ -154,13 +245,6 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const accessToken = await createGoogleAccessToken(clientEmail, privateKey);
-    if (!accessToken) {
-      return new Response(JSON.stringify({ error: "Could not obtain Google access token." }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     const authHeader = req.headers.get("authorization") || "";
     const currentUser = await getUserFromBearer(admin, authHeader);
@@ -171,26 +255,74 @@ serve(async (req) => {
       });
     }
 
-    const isAdmin = await isAdminUser(admin, currentUser.id);
-    if (!isAdmin) {
-      return new Response(JSON.stringify({ error: "Forbidden." }), {
+    const actor = await getActorProfile(admin, currentUser.id);
+    if (!actor?.role) {
+      return new Response(JSON.stringify({ error: "User profile not found." }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const payload = await req.json().catch(() => ({}));
+    const payload: DispatchPayload = await req.json().catch(() => ({}));
     const title = String(payload?.title || "").trim();
     const message = String(payload?.message || "").trim();
     const type = String(payload?.type || "SYSTEM").trim();
     const page = String(payload?.page || "").trim();
-    const userIds = Array.isArray(payload?.userIds)
-      ? payload.userIds.map((u: any) => String(u)).filter(Boolean)
-      : [];
+    const persistNotification = payload.persistNotification !== false;
 
-    if (!title || !message || userIds.length === 0) {
-      return new Response(JSON.stringify({ error: "Invalid payload." }), {
+    if (!title || !message) {
+      return new Response(JSON.stringify({ error: "Invalid payload (title/message)." }), {
         status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    let recipients = await resolveRecipients(admin, payload);
+    if (!recipients.length) {
+      return new Response(JSON.stringify({ success: true, sent: 0, failed: 0, reason: "no_recipients" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (actor.role !== "ADMIN") {
+      if (actor.role !== "PHARMACY") {
+        return new Response(JSON.stringify({ error: "Forbidden." }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const allowedRecipients = await filterRecipientsForPharmacyActor(
+        admin,
+        String(actor.pharmacy_id || ""),
+        recipients,
+      );
+
+      if (!allowedRecipients.length || allowedRecipients.length !== recipients.length) {
+        return new Response(JSON.stringify({ error: "Forbidden audience for pharmacy actor." }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      recipients = allowedRecipients;
+    }
+
+    if (persistNotification && recipients.length > 0) {
+      const rows = recipients.map((userId) => ({
+        user_id: userId,
+        title,
+        message,
+        type,
+        is_read: false,
+      }));
+      await admin.from("notifications").insert(rows);
+    }
+
+    const accessToken = await createGoogleAccessToken(clientEmail, privateKey);
+    if (!accessToken) {
+      return new Response(JSON.stringify({ error: "Could not obtain Google access token." }), {
+        status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -198,7 +330,7 @@ serve(async (req) => {
     const { data: tokens, error: tokensError } = await admin
       .from("push_tokens")
       .select("token, user_id")
-      .in("user_id", userIds)
+      .in("user_id", recipients)
       .eq("is_active", true);
 
     if (tokensError) {
@@ -210,7 +342,14 @@ serve(async (req) => {
 
     if (!tokens?.length) {
       return new Response(
-        JSON.stringify({ success: true, sent: 0, failed: 0, inactive: 0, reason: "no_tokens" }),
+        JSON.stringify({
+          success: true,
+          sent: 0,
+          failed: 0,
+          inactive: 0,
+          recipients: recipients.length,
+          reason: "no_tokens",
+        }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -235,11 +374,7 @@ serve(async (req) => {
         sent += 1;
       } else {
         failed += 1;
-        const normalized = String(fcmError).toUpperCase();
-        if (
-          normalized.includes("NOTREGISTERED") ||
-          normalized.includes("INVALIDREGISTRATION")
-        ) {
+        if (shouldDeactivateToken(String(fcmError))) {
           deactivateList.push(t.token);
         }
       }
@@ -258,6 +393,7 @@ serve(async (req) => {
         sent,
         failed,
         inactive: deactivateList.length,
+        recipients: recipients.length,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

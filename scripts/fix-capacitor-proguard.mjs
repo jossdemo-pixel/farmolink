@@ -4,6 +4,7 @@ import { join } from "node:path";
 const targets = [
   "node_modules/@capacitor/android/capacitor/build.gradle",
   "node_modules/@capacitor/app/android/build.gradle",
+  "node_modules/@capacitor/local-notifications/android/build.gradle",
   "node_modules/@capacitor/push-notifications/android/build.gradle",
   "node_modules/@capacitor-community/text-to-speech/android/build.gradle",
 ];

@@ -59,6 +59,59 @@ const getCommissionRateForPharmacy = async (pharmacyId: string): Promise<number>
     }
 };
 
+const pushOrderStatusUpdateToCustomer = async (
+    customerId: string,
+    nextStatus: OrderStatus,
+    orderType: 'DELIVERY' | 'PICKUP'
+) => {
+    const copy: Record<string, { title: string; message: string; page: string }> = {
+        [OrderStatus.PREPARING]: {
+            title: 'PEDIDO EM PREPARACAO',
+            message: 'A farmácia já começou a preparar o teu pedido.',
+            page: 'orders'
+        },
+        [OrderStatus.OUT_FOR_DELIVERY]: {
+            title: 'PEDIDO A CAMINHO',
+            message: 'O estafeta saiu com o teu pedido para entrega.',
+            page: 'orders'
+        },
+        [OrderStatus.READY_FOR_PICKUP]: {
+            title: 'PEDIDO PRONTO',
+            message: 'O teu pedido está pronto para levantamento na farmácia.',
+            page: 'orders'
+        },
+        [OrderStatus.COMPLETED]: {
+            title: 'PEDIDO CONCLUIDO',
+            message: 'Pedido concluído com sucesso. Obrigado por comprar na FarmoLink.',
+            page: 'orders'
+        },
+        [OrderStatus.REJECTED]: {
+            title: 'PEDIDO RECUSADO',
+            message: 'A farmácia recusou o pedido. Verifica os detalhes no histórico.',
+            page: 'orders'
+        },
+        [OrderStatus.CANCELLED]: {
+            title: 'PEDIDO CANCELADO',
+            message: 'O pedido foi cancelado.',
+            page: 'orders'
+        }
+    };
+
+    const payload = copy[nextStatus];
+    if (!payload) return;
+
+    await supabase.functions.invoke('push-dispatch', {
+        body: {
+            singleUserId: customerId,
+            title: payload.title,
+            message: payload.message,
+            type: orderType === 'PICKUP' ? 'ORDER_PICKUP' : 'ORDER_STATUS',
+            page: payload.page,
+            persistNotification: true
+        }
+    });
+};
+
 export const createPrescriptionRequest = async (
     customerId: string, 
     imageUrl: string, 
@@ -223,6 +276,12 @@ export const sendPrescriptionQuote = async (
     deliveryFee: number,
     notes?: string
 ): Promise<boolean> => {
+    const { data: rxBefore } = await supabase
+        .from('prescriptions')
+        .select('customer_id')
+        .eq('id', prescriptionId)
+        .maybeSingle();
+
     const totalPrice = items.reduce((acc, it) => acc + (Number(it.price) * Number(it.quantity || 1)), 0);
     const { error: quoteError } = await supabase.from('prescription_quotes').insert([{
         prescription_id: prescriptionId, pharmacy_id: pharmacyId, pharmacy_name: pharmacyName,
@@ -232,6 +291,21 @@ export const sendPrescriptionQuote = async (
 
     if (quoteError) return false;
     await supabase.from('prescriptions').update({ status: 'WAITING_FOR_QUOTES' }).eq('id', prescriptionId).neq('status', 'COMPLETED');
+
+    if (rxBefore?.customer_id) {
+        await supabase.functions.invoke('push-dispatch', {
+            body: {
+                singleUserId: rxBefore.customer_id,
+                title: 'ORCAMENTO RECEBIDO',
+                message: `${pharmacyName} respondeu a tua receita com um orçamento.`,
+                type: 'RX_RESPONSE',
+                page: 'prescriptions',
+                // A trigger SQL já tenta persistir em notifications. Aqui só garantimos push.
+                persistNotification: false
+            }
+        });
+    }
+
     return true;
 };
 
@@ -299,8 +373,28 @@ export const createOrder = async (order: Omit<Order, 'id' | 'date'>): Promise<{ 
 };
 
 export const updateOrderStatus = async (orderId: string, status: OrderStatus): Promise<boolean> => {
+    const { data: orderRow } = await supabase
+        .from('orders')
+        .select('id, customer_id, type')
+        .eq('id', orderId)
+        .maybeSingle();
+
     const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
-    return !error;
+    if (error) return false;
+
+    if (orderRow?.customer_id) {
+        try {
+            await pushOrderStatusUpdateToCustomer(
+                orderRow.customer_id,
+                status,
+                (orderRow.type as 'DELIVERY' | 'PICKUP') || 'DELIVERY'
+            );
+        } catch (e) {
+            console.warn('Falha ao enviar push de status de pedido:', e);
+        }
+    }
+
+    return true;
 };
 
 export const rejectOrderAndRestoreStock = async (

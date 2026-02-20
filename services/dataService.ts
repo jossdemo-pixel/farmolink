@@ -328,7 +328,35 @@ export const sendTicketMessage = async (ticketId: string, senderId: string, send
     const { error } = await supabase.from('support_messages').insert([{
         ticket_id: ticketId, sender_id: senderId, sender_name: senderName, sender_role: senderRole, message
     }]);
-    return !error;
+    if (error) return false;
+
+    // Quando o admin responde, dispara notificação imediata para o cliente.
+    if (senderRole === 'ADMIN') {
+        try {
+            const { data: ticket } = await supabase
+                .from('support_tickets')
+                .select('user_id')
+                .eq('id', ticketId)
+                .maybeSingle();
+
+            if (ticket?.user_id) {
+                await supabase.functions.invoke('push-dispatch', {
+                    body: {
+                        singleUserId: ticket.user_id,
+                        title: 'SUPORTE RESPONDEU',
+                        message: 'Recebeste uma nova resposta no teu atendimento.',
+                        type: 'SUPPORT_REPLY',
+                        page: 'support',
+                        persistNotification: true
+                    }
+                });
+            }
+        } catch (e) {
+            console.warn('Falha ao acionar push de suporte:', e);
+        }
+    }
+
+    return true;
 };
 
 export const updateTicketStatus = async (ticketId: string, status: string) => {
@@ -366,32 +394,82 @@ export const deletePartner = async (id: string) => {
 
 export const sendSystemNotification = async (target: 'ALL' | 'CUSTOMER' | 'PHARMACY', title: string, message: string) => {
     try {
-        let userQuery = supabase.from('profiles').select('id');
-        if (target !== 'ALL') userQuery = userQuery.eq('role', target);
-        
-        const { data: users } = await userQuery;
-        if (!users || users.length === 0) return true;
-
-        const notifications = users.map(u => ({
-            user_id: u.id, title, message, type: 'SYSTEM', is_read: false
-        }));
-
-        const { error } = await supabase.from('notifications').insert(notifications);
-        if (error) return false;
-
-        // Disparo imediato de push para app fechado (quando Edge Function estiver deployada).
-        await supabase.functions.invoke('push-dispatch', {
+        const { data, error } = await supabase.functions.invoke('push-dispatch', {
             body: {
-                userIds: users.map(u => u.id),
                 title,
                 message,
                 type: 'SYSTEM',
-                page: target === 'PHARMACY' ? 'dashboard' : 'home'
+                target,
+                page: target === 'PHARMACY' ? 'pharmacy-orders' : 'home',
+                persistNotification: true
             }
         });
 
-        return true;
+        if (error) return false;
+        return !!data?.success;
     } catch (e) { return false; }
+};
+
+export const sendSystemNotificationToUser = async (
+    userId: string,
+    title: string,
+    message: string,
+    page: string = 'home'
+): Promise<boolean> => {
+    try {
+        if (!userId || !title.trim() || !message.trim()) return false;
+
+        const { data, error } = await supabase.functions.invoke('push-dispatch', {
+            body: {
+                singleUserId: userId,
+                title: title.trim(),
+                message: message.trim(),
+                type: 'SYSTEM',
+                page,
+                persistNotification: true
+            }
+        });
+
+        if (error) return false;
+        return !!data?.success;
+    } catch {
+        return false;
+    }
+};
+
+export interface NotificationRecipient {
+    id: string;
+    name: string;
+    email: string;
+    role: UserRole;
+}
+
+export const fetchNotificationRecipients = async (
+    role?: 'CUSTOMER' | 'PHARMACY' | 'ADMIN'
+): Promise<NotificationRecipient[]> => {
+    try {
+        let query = supabase
+            .from('profiles')
+            .select('id, name, email, role')
+            .order('created_at', { ascending: false })
+            .limit(200);
+
+        if (role) query = query.eq('role', role);
+
+        const { data, error } = await query;
+        if (error) return [];
+
+        return (data || [])
+            .filter((p: any) => !!p?.id)
+            .map((p: any) => ({
+                id: p.id,
+                name: p.name || 'Sem nome',
+                email: p.email || '',
+                role: p.role
+            }));
+    } catch {
+        return [];
+    }
 };
 
 // --- CACHE PARA RELATÓRIOS FINANCEIROS ---

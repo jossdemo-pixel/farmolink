@@ -480,6 +480,28 @@ FOR UPDATE
 USING (user_id = auth.uid() OR is_admin())
 WITH CHECK (user_id = auth.uid() OR is_admin());
 
+-- POLÍTICAS NOTIFICATIONS (utente apenas as suas; admin pode tudo)
+DROP POLICY IF EXISTS "Notifications Self Select" ON public.notifications;
+CREATE POLICY "Notifications Self Select" ON public.notifications
+FOR SELECT
+USING (user_id = auth.uid() OR is_admin());
+
+DROP POLICY IF EXISTS "Notifications Self Insert" ON public.notifications;
+CREATE POLICY "Notifications Self Insert" ON public.notifications
+FOR INSERT
+WITH CHECK (user_id = auth.uid() OR is_admin());
+
+DROP POLICY IF EXISTS "Notifications Self Update" ON public.notifications;
+CREATE POLICY "Notifications Self Update" ON public.notifications
+FOR UPDATE
+USING (user_id = auth.uid() OR is_admin())
+WITH CHECK (user_id = auth.uid() OR is_admin());
+
+DROP POLICY IF EXISTS "Notifications Self Delete" ON public.notifications;
+CREATE POLICY "Notifications Self Delete" ON public.notifications
+FOR DELETE
+USING (user_id = auth.uid() OR is_admin());
+
 -- ============================================================================
 -- 4. AUTOMAÇÃO DE STOCK (FIXED: SUPORTE A ITENS MANUAIS)
 -- ============================================================================
@@ -774,7 +796,7 @@ BEGIN
     SELECT customer_id, 'ORÇAMENTO RECEBIDO 💰', 'A ' || NEW.pharmacy_name || ' respondeu à tua receita. Toque para ver.', 'RX_RESPONSE'
     FROM prescriptions WHERE id = NEW.prescription_id;
     RETURN NEW;
-END; $$ LANGUAGE plpgsql;
+END; $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 DROP TRIGGER IF EXISTS tr_notify_quote ON prescription_quotes;
 CREATE TRIGGER tr_notify_quote AFTER INSERT ON prescription_quotes FOR EACH ROW EXECUTE FUNCTION notify_customer_on_quote();
@@ -809,7 +831,7 @@ BEGIN
     END IF;
 
     RETURN NEW;
-END; $$ LANGUAGE plpgsql;
+END; $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 DROP TRIGGER IF EXISTS tr_notify_rx ON prescriptions;
 CREATE TRIGGER tr_notify_rx AFTER INSERT OR UPDATE OF status ON prescriptions FOR EACH ROW EXECUTE FUNCTION notify_pharmacies_on_rx();
