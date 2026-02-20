@@ -9,12 +9,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "postinstall": "node scripts/fix-capacitor-proguard.mjs",
     "prepare-android": "npm run build && npx cap sync android && npx cap open android"
   },
   "dependencies": {
     "@capacitor-community/text-to-speech": "^5.0.0",
     "@capacitor/app": "^6.0.0",
     "@capacitor/core": "^6.0.0",
+    "@capacitor/push-notifications": "^6.0.5",
     "@supabase/supabase-js": "^2.39.3",
     "lucide-react": "^0.562.0",
     "react": "^19.0.0",

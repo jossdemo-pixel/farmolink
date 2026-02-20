@@ -11,10 +11,11 @@ import { fetchPharmacies } from './services/pharmacyService';
 import { fetchProducts, fetchPharmacyInventory } from './services/productService'; // Importação atualizada
 import { fetchOrders, fetchPrescriptionRequests, createOrder } from './services/orderService';
 import { getCacheForUser, getLastSyncForUser, setCacheForUser } from './services/dataService';
-import { playSound } from './services/soundService';
+import { playSound, triggerHapticFeedback } from './services/soundService';
 import { getCurrentPosition, calculateDistance } from './services/locationService';
 import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info, Trash2 } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
+import { initializePushNotifications, teardownPushNotifications } from './services/pushService';
 
 // --- Static View Imports ---
 import { HomeView, AllPharmaciesView, CartView, PharmacyProfileView } from './views/CustomerShop'; // NOVA VIEW
@@ -443,6 +444,15 @@ export const App: React.FC = () => {
         }
     }, [syncOfflineQueue]);
 
+    useEffect(() => {
+        if (!user?.id) return;
+        initializePushNotifications(user.id, (targetPage) => setPage(targetPage));
+
+        return () => {
+            teardownPushNotifications();
+        };
+    }, [user?.id]);
+
     const handleLoginSuccess = (userData: User) => {
         setUser(userData);
         loadData(userData);
@@ -569,6 +579,8 @@ export const App: React.FC = () => {
     };
 
     const removeItemFromCart = (productId: string) => {
+        playSound('trash');
+        triggerHapticFeedback(12);
         setCart(prev => {
             const updated = prev.filter(item => item.id !== productId);
             if (updated.length === 0 && page !== 'pharmacy-detail') setActivePharmacyId(null);
@@ -609,6 +621,7 @@ export const App: React.FC = () => {
 
     const updateCartQuantity = (id: string, delta: number) => {
         setCart(prev => {
+            let hasChanged = false;
             const updated = prev.map(item => {
                 if (item.id !== id) return item;
                 const maxStock = typeof item.stock === 'number' ? item.stock : Infinity;
@@ -619,9 +632,13 @@ export const App: React.FC = () => {
                     playSound('error');
                     return item;
                 }
-
+                hasChanged = true;
                 return { ...item, quantity: Math.max(0, nextQty) };
             }).filter(item => item.quantity > 0);
+            if (hasChanged) {
+                playSound(delta > 0 ? 'click' : 'trash');
+                triggerHapticFeedback(8);
+            }
             if (updated.length === 0 && page !== 'pharmacy-detail') setActivePharmacyId(null);
             return updated;
         });

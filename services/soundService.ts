@@ -24,6 +24,8 @@ const SOUNDS = {
 };
 
 const AUDIO_CACHE = new Map<string, HTMLAudioElement>();
+const LAST_PLAYED_AT = new Map<keyof typeof SOUNDS, number>();
+const SOUND_COOLDOWN_MS = 70;
 
 // Habilita áudio automático através de interação do usuário
 let audioContextInitialized = false;
@@ -46,6 +48,11 @@ const initAudioContext = () => {
 
 export const playSound = (type: keyof typeof SOUNDS) => {
     try {
+        const now = Date.now();
+        const lastPlayedAt = LAST_PLAYED_AT.get(type) || 0;
+        if (now - lastPlayedAt < SOUND_COOLDOWN_MS) return;
+        LAST_PLAYED_AT.set(type, now);
+
         initAudioContext();
         
         const audioUrl = SOUNDS[type] || SOUNDS.click;
@@ -80,6 +87,16 @@ export const playSound = (type: keyof typeof SOUNDS) => {
     } catch (error) {
         // Silenciosamente ignora erros de som em APK
         console.warn("Erro ao tocar som:", error);
+    }
+};
+
+export const triggerHapticFeedback = (pattern: number | number[] = 10) => {
+    try {
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            navigator.vibrate(pattern);
+        }
+    } catch (error) {
+        // No-op: haptics are best effort only.
     }
 };
 

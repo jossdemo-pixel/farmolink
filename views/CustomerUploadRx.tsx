@@ -61,13 +61,13 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // AUTO-SELEÇÃO INTELIGENTE: Se o usuário não escolheu nenhuma, seleciona as 5 melhores.
+  // AUTO-SELEÇÃO INTELIGENTE: Se o usuário não escolheu nenhuma, seleciona a melhor disponível.
   useEffect(() => {
     if (step === 'CONFIRM' && selectedPharmacies.length === 0) {
         const auto = pharmacies
             .filter(p => p.status === 'APPROVED' && p.isAvailable)
             .sort((a, b) => (b.review_score || 0) - (a.review_score || 0))
-            .slice(0, 5)
+            .slice(0, 1)
             .map(p => p.id);
         if (auto.length > 0) setSelectedPharmacies(auto);
     }
@@ -109,12 +109,12 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
           alert("Sem internet. Nao foi possivel enviar a receita.");
           return;
       }
-      // VALIDAÇÃO FINAL: Garante que há farmácias selecionadas
+      // VALIDAÇÃO FINAL: Garante que há uma farmácia selecionada
       let targets = [...selectedPharmacies];
       if (targets.length === 0) {
           targets = pharmacies
             .filter(p => p.status === 'APPROVED' && p.isAvailable)
-            .slice(0, 5)
+            .slice(0, 1)
             .map(p => p.id);
           
           if (targets.length === 0) {
@@ -153,8 +153,8 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
   };
 
   const togglePharmacy = (id: string) => {
-      setSelectedPharmacies(prev => 
-          prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
+      setSelectedPharmacies(prev =>
+          prev.includes(id) ? [] : [id]
       );
       playSound('click');
   };
@@ -179,7 +179,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                           <Camera size={40} />
                       </div>
                       <h3 className="text-2xl font-black text-gray-800 mb-2">Mandar Direto</h3>
-                      <p className="text-sm text-gray-500 font-medium leading-relaxed">Tu escolhes as farmácias e elas respondem com os preços delas.</p>
+                      <p className="text-sm text-gray-500 font-medium leading-relaxed">Tu escolhes uma farmácia e ela responde com os preços.</p>
                       <div className="mt-8 flex items-center gap-2 text-emerald-600 font-black text-xs uppercase tracking-widest">Tirar Foto <ChevronRight size={16}/></div>
                   </div>
 
@@ -192,7 +192,7 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
                           <BrainCircuit size={40} />
                       </div>
                       <h3 className="text-2xl font-black text-gray-800 mb-2">Scan Inteligente</h3>
-                      <p className="text-sm text-gray-500 font-medium leading-relaxed">A nossa IA lê a letra do médico e busca preços em toda a rede agora mesmo.</p>
+                      <p className="text-sm text-gray-500 font-medium leading-relaxed">A nossa IA lê a letra do médico e envia para uma farmácia selecionada agora mesmo.</p>
                       <div className="mt-8 flex items-center gap-2 text-blue-600 font-black text-xs uppercase tracking-widest">Analisar com IA <Sparkles size={16}/></div>
                   </div>
               </div>
@@ -320,9 +320,9 @@ export const PrescriptionUploadView = ({ pharmacies, user, onNavigate }: { pharm
 
                       <div className="border-t border-gray-100 pt-6">
                           <div className="flex justify-between items-center mb-6">
-                              <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Destinos do Pedido</h5>
+                              <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Farmácia do Pedido</h5>
                               <span className={`text-[10px] px-3 py-1 rounded-full font-black ${method === 'AI' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                  {selectedPharmacies.length > 0 ? selectedPharmacies.length : 'AUTO'} SELECIONADAS
+                                  {selectedPharmacies.length > 0 ? '1' : 'AUTO'} SELECIONADA
                               </span>
                           </div>
                           

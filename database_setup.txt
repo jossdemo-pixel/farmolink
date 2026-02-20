@@ -265,6 +265,18 @@ CREATE TABLE IF NOT EXISTS public.notifications (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Tokens de push para notificacoes nativas (Android/iOS)
+CREATE TABLE IF NOT EXISTS public.push_tokens (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    platform TEXT DEFAULT 'android',
+    is_active BOOLEAN DEFAULT true,
+    device_label TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Chatbot History
 CREATE TABLE IF NOT EXISTS public.bot_conversations (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -355,6 +367,7 @@ ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescription_quotes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.push_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_banners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_faq ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_about ENABLE ROW LEVEL SECURITY;
@@ -449,6 +462,23 @@ DROP POLICY IF EXISTS "Ledger Admin View" ON public.financial_ledger;
 CREATE POLICY "Ledger Admin View" ON public.financial_ledger FOR SELECT USING (is_admin());
 DROP POLICY IF EXISTS "Ledger Admin Insert" ON public.financial_ledger;
 CREATE POLICY "Ledger Admin Insert" ON public.financial_ledger FOR INSERT WITH CHECK (is_admin());
+
+-- POLÍTICAS PUSH_TOKENS (utente/farmacia/admin apenas no proprio token)
+DROP POLICY IF EXISTS "Push Tokens Self Select" ON public.push_tokens;
+CREATE POLICY "Push Tokens Self Select" ON public.push_tokens
+FOR SELECT
+USING (user_id = auth.uid() OR is_admin());
+
+DROP POLICY IF EXISTS "Push Tokens Self Upsert" ON public.push_tokens;
+CREATE POLICY "Push Tokens Self Upsert" ON public.push_tokens
+FOR INSERT
+WITH CHECK (user_id = auth.uid() OR is_admin());
+
+DROP POLICY IF EXISTS "Push Tokens Self Update" ON public.push_tokens;
+CREATE POLICY "Push Tokens Self Update" ON public.push_tokens
+FOR UPDATE
+USING (user_id = auth.uid() OR is_admin())
+WITH CHECK (user_id = auth.uid() OR is_admin());
 
 -- ============================================================================
 -- 4. AUTOMAÇÃO DE STOCK (FIXED: SUPORTE A ITENS MANUAIS)
@@ -796,6 +826,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_open_commission_by_pharmacy_created
 ON public.orders(pharmacy_id, commission_status, created_at)
 WHERE commission_status IN ('PENDING', 'PARTIAL');
 CREATE INDEX IF NOT EXISTS idx_prescriptions_customer ON public.prescriptions(customer_id);
+CREATE INDEX IF NOT EXISTS idx_push_tokens_user_active ON public.push_tokens(user_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_admin_banners_order ON public.admin_banners("order");
 CREATE INDEX IF NOT EXISTS idx_admin_faq_order ON public.admin_faq("order");
 CREATE INDEX IF NOT EXISTS idx_system_config_key ON public.system_config(config_key);

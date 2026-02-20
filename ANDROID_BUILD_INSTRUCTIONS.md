@@ -218,3 +218,30 @@ Para problemas com a compilação, verifique:
 **Status:** ✅ Projeto pronto para compilação APK
 **Data:** 11 de Fevereiro de 2026
 **Versão:** 1.0.0
+
+## Push Notifications (App Fechado)
+
+1. Instalar plugin push no app:
+```bash
+npm install @capacitor/push-notifications --save
+npx cap sync android
+```
+
+2. Configurar Firebase Cloud Messaging (FCM):
+- Criar projeto Firebase.
+- Registrar app Android com o mesmo `applicationId`.
+- Baixar `google-services.json` e colocar em `android/app/google-services.json`.
+- Ativar Cloud Messaging.
+
+3. Publicar dispatcher no Supabase:
+```bash
+supabase functions deploy push-dispatch
+supabase secrets set FCM_PROJECT_ID=SEU_FIREBASE_PROJECT_ID
+supabase secrets set FCM_CLIENT_EMAIL="firebase-adminsdk-xxxx@SEU_PROJETO.iam.gserviceaccount.com"
+supabase secrets set FCM_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nSUA_CHAVE\n-----END PRIVATE KEY-----\n"
+```
+
+4. Fluxo no FarmoLink:
+- `notifications` continua como historico no app.
+- `push_tokens` guarda tokens ativos por utilizador/dispositivo.
+- `push-dispatch` envia push para os tokens quando houver comunicado admin.

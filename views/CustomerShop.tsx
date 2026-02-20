@@ -402,7 +402,13 @@ export const CartView = ({ items, pharmacies, updateQuantity, onRemoveItem, onCh
 
     return (
         <div className="max-w-4xl mx-auto py-10 animate-fade-in pb-32">
-            <button onClick={onBack} className="text-gray-400 font-black text-xs uppercase mb-6 flex items-center gap-2" disabled={isProcessing}><ArrowLeft size={16}/> Ver mais medicamentos</button>
+            <button
+                onClick={() => { playSound('click'); onBack(); }}
+                className="text-gray-400 font-black text-xs uppercase mb-6 flex items-center gap-2"
+                disabled={isProcessing}
+            >
+                <ArrowLeft size={16}/> Ver mais medicamentos
+            </button>
             <h2 className="text-3xl font-black text-gray-800 mb-8">Finalizar Pedido</h2>
             
             {items.length === 0 ? (
@@ -451,9 +457,21 @@ export const CartView = ({ items, pharmacies, updateQuantity, onRemoveItem, onCh
                                     <img src={optimizeImg(it.image)} className="w-16 h-16 object-contain rounded-xl bg-gray-50 p-2" loading="lazy" alt={it.name} />
                                     <div className="flex-1"><h4 className="font-bold text-gray-800 text-sm">{formatProductNameForCustomer(it.name)}</h4><p className="text-emerald-600 font-black">Kz {(it.price * it.quantity).toLocaleString()}</p></div>
                                     <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border">
-                                        <button disabled={isProcessing} onClick={() => updateQuantity(it.id, -1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">-</button>
+                                        <button
+                                            disabled={isProcessing}
+                                            onClick={() => { playSound('click'); updateQuantity(it.id, -1); }}
+                                            className="w-8 h-8 bg-white rounded-xl shadow-sm font-black"
+                                        >
+                                            -
+                                        </button>
                                         <span className="font-black">{it.quantity}</span>
-                                        <button disabled={isProcessing} onClick={() => updateQuantity(it.id, 1)} className="w-8 h-8 bg-white rounded-xl shadow-sm font-black">+</button>
+                                        <button
+                                            disabled={isProcessing}
+                                            onClick={() => { playSound('click'); updateQuantity(it.id, 1); }}
+                                            className="w-8 h-8 bg-white rounded-xl shadow-sm font-black"
+                                        >
+                                            +
+                                        </button>
                                     </div>
                                     <button
                                         disabled={isProcessing}
@@ -473,13 +491,18 @@ export const CartView = ({ items, pharmacies, updateQuantity, onRemoveItem, onCh
                         <h3 className="font-black text-xl border-b border-white/10 pb-4">Resumo da Compra</h3>
                         <div className="flex gap-2 p-1 bg-white/10 rounded-2xl">
                             <button 
-                                onClick={() => setType('DELIVERY')} 
+                                onClick={() => { playSound('click'); setType('DELIVERY'); }} 
                                 disabled={!pharm?.deliveryActive}
                                 className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${!pharm?.deliveryActive ? 'opacity-30 cursor-not-allowed' : (type === 'DELIVERY' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent')}`}
                             >
                                 Entrega
                             </button>
-                            <button onClick={() => setType('PICKUP')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${type === 'PICKUP' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent'}`}>Levantamento</button>
+                            <button
+                                onClick={() => { playSound('click'); setType('PICKUP'); }}
+                                className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${type === 'PICKUP' ? 'bg-white text-emerald-900 shadow-xl' : 'text-white border-transparent'}`}
+                            >
+                                Levantamento
+                            </button>
                         </div>
                         
                         {!pharm?.deliveryActive && (

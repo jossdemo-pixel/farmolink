@@ -147,10 +147,49 @@ export const markNotificationRead = async (id: string): Promise<boolean> => {
     return !error;
 }
 
+export const markNotificationsReadBatch = async (ids: string[]): Promise<boolean> => {
+    if (!ids.length) return true;
+    const { error } = await supabase.from('notifications').update({ is_read: true }).in('id', ids);
+    return !error;
+}
+
 export const deleteNotification = async (id: string): Promise<boolean> => {
     const { error } = await supabase.from('notifications').delete().eq('id', id);
     return !error;
 }
+
+export const upsertPushToken = async (
+    userId: string,
+    token: string,
+    platform: 'android' | 'ios' | 'web' = 'android'
+): Promise<boolean> => {
+    if (!userId || !token) return false;
+
+    const { error } = await supabase
+        .from('push_tokens')
+        .upsert(
+            {
+                user_id: userId,
+                token,
+                platform,
+                is_active: true,
+                device_label: navigator.userAgent,
+                updated_at: new Date().toISOString()
+            },
+            { onConflict: 'token' }
+        );
+
+    return !error;
+};
+
+export const deactivatePushToken = async (token: string): Promise<boolean> => {
+    if (!token) return false;
+    const { error } = await supabase
+        .from('push_tokens')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('token', token);
+    return !error;
+};
 
 // --- LANDING ---
 export const fetchLandingContent = async (): Promise<{ slides: CarouselSlide[], partners: Partner[] }> => {
@@ -338,7 +377,20 @@ export const sendSystemNotification = async (target: 'ALL' | 'CUSTOMER' | 'PHARM
         }));
 
         const { error } = await supabase.from('notifications').insert(notifications);
-        return !error;
+        if (error) return false;
+
+        // Disparo imediato de push para app fechado (quando Edge Function estiver deployada).
+        await supabase.functions.invoke('push-dispatch', {
+            body: {
+                userIds: users.map(u => u.id),
+                title,
+                message,
+                type: 'SYSTEM',
+                page: target === 'PHARMACY' ? 'dashboard' : 'home'
+            }
+        });
+
+        return true;
     } catch (e) { return false; }
 };
 

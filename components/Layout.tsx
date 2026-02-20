@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Bell, Menu, X, LogOut, ShoppingCart, Trash2, ChevronLeft, ChevronRight, FileText, ShoppingBag, Info, MessageCircle, Wallet } from 'lucide-react';
-import { User, Notification, UserRole } from '../types';
-import { fetchNotifications, markNotificationRead, deleteNotification } from '../services/dataService';
-import { playSound } from '../services/soundService';
+import { UserRole } from '../types';
+import type { User, Notification as AppNotification } from '../types';
+import { fetchNotifications, markNotificationRead, markNotificationsReadBatch, deleteNotification } from '../services/dataService';
+import { playSound, triggerHapticFeedback } from '../services/soundService';
 import { supabase } from '../services/supabaseClient';
 
 interface LayoutProps {
@@ -17,6 +18,24 @@ interface LayoutProps {
 }
 
 const LOGO_URL = "https://res.cloudinary.com/dzvusz0u4/image/upload/v1765977310/wrzwildc1kqsq5skklio.png";
+
+const showWebSystemNotification = (title: string, body: string) => {
+  try {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (document.visibilityState === 'visible') return;
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then((permission) => {
+        if (permission === 'granted') {
+          new Notification(title, { body });
+        }
+      });
+    }
+  } catch (error) {
+    // Best effort only.
+  }
+};
 
 export const Header: React.FC<{ currentPage: string, setPage: (p: string) => void, onLoginClick: () => void }> = ({ 
   onLoginClick 
@@ -44,7 +63,7 @@ export const MainLayout: React.FC<LayoutProps> = ({
 }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false); 
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotif, setShowNotif] = useState(false);
   
   const prevUnreadCountRef = useRef(0);
@@ -59,9 +78,14 @@ export const MainLayout: React.FC<LayoutProps> = ({
           .channel(`user-notifs-${user.id}`)
           .on('postgres_changes', 
               { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, 
-              () => {
+              (payload: any) => {
                   loadNotifications();
                   playSound('notification');
+                  triggerHapticFeedback([18, 50, 18]);
+                  showWebSystemNotification(
+                    payload?.new?.title || 'Nova notificacao',
+                    payload?.new?.message || 'Existe uma nova atualizacao'
+                  );
               }
           )
           .subscribe();
@@ -101,18 +125,19 @@ export const MainLayout: React.FC<LayoutProps> = ({
           const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
           setNotifications(prev => prev.map(n => ({...n, read: true})));
           prevUnreadCountRef.current = 0;
-          for (const id of unreadIds) await markNotificationRead(id);
+          await markNotificationsReadBatch(unreadIds);
       }
   };
 
   const handleDeleteNotif = async (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
+      playSound('trash');
       await deleteNotification(id);
       setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
   // 2. ROTEAMENTO INTELIGENTE DE NOTIFICAÇÕES
-  const handleNotificationClick = async (notif: Notification) => {
+  const handleNotificationClick = async (notif: AppNotification) => {
       // Marca como lida
       if (!notif.read) {
           await markNotificationRead(notif.id);
