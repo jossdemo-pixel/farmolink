@@ -445,16 +445,21 @@ export interface NotificationRecipient {
 }
 
 export const fetchNotificationRecipients = async (
-    role?: 'CUSTOMER' | 'PHARMACY' | 'ADMIN'
+    role?: 'CUSTOMER' | 'PHARMACY' | 'ADMIN',
+    searchTerm?: string
 ): Promise<NotificationRecipient[]> => {
     try {
         let query = supabase
             .from('profiles')
             .select('id, name, email, role')
-            .order('created_at', { ascending: false })
-            .limit(200);
+            .order('name', { ascending: true })
+            .limit(500);
 
         if (role) query = query.eq('role', role);
+        const normalizedSearch = String(searchTerm || '').trim().replace(/[%_,]/g, ' ');
+        if (normalizedSearch) {
+            query = query.or(`name.ilike.%${normalizedSearch}%,email.ilike.%${normalizedSearch}%`);
+        }
 
         const { data, error } = await query;
         if (error) return [];

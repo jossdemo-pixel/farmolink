@@ -1,3 +1,6 @@
+import { Capacitor } from '@capacitor/core';
+import { PushNotifications, Token, PushNotificationSchema, ActionPerformed } from '@capacitor/push-notifications';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { upsertPushToken, deactivatePushToken } from './dataService';
 import { playSound, triggerHapticFeedback } from './soundService';
 
@@ -9,29 +12,9 @@ let removeListeners: (() => Promise<void>) | null = null;
 
 const isNativePlatform = (): boolean => {
     try {
-        const capacitor = (window as any)?.Capacitor;
-        if (capacitor?.isNativePlatform && typeof capacitor.isNativePlatform === 'function') {
-            return capacitor.isNativePlatform();
-        }
-        return false;
+        return Capacitor.isNativePlatform();
     } catch {
         return false;
-    }
-};
-
-const getPushPlugin = (): any | null => {
-    try {
-        return (window as any)?.Capacitor?.Plugins?.PushNotifications || null;
-    } catch {
-        return null;
-    }
-};
-
-const getLocalNotificationsPlugin = (): any | null => {
-    try {
-        return (window as any)?.Capacitor?.Plugins?.LocalNotifications || null;
-    } catch {
-        return null;
     }
 };
 
@@ -50,75 +33,76 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
         removeListeners = null;
     }
 
-    const PushNotifications = getPushPlugin();
-    const LocalNotifications = getLocalNotificationsPlugin();
-    if (!PushNotifications) return;
-
     const permission = await PushNotifications.requestPermissions();
     if (permission.receive !== 'granted') return;
 
+    await PushNotifications.createChannel({
+        id: 'farmolink-important',
+        name: 'FarmoLink Importantes',
+        description: 'Alertas importantes de pedidos, suporte e sistema',
+        importance: 5,
+        sound: 'default',
+        visibility: 1
+    }).catch(() => undefined);
+
     await PushNotifications.register();
 
-    if (LocalNotifications) {
-        try {
-            await LocalNotifications.requestPermissions();
-            await LocalNotifications.createChannel?.({
-                id: 'farmolink-important',
-                name: 'FarmoLink Importantes',
-                description: 'Alertas importantes de pedidos, suporte e sistema',
-                importance: 5,
-                sound: 'default',
-                visibility: 1
-            });
+    try {
+        await LocalNotifications.requestPermissions();
+        await LocalNotifications.createChannel({
+            id: 'farmolink-important',
+            name: 'FarmoLink Importantes',
+            description: 'Alertas importantes de pedidos, suporte e sistema',
+            importance: 5,
+            sound: 'default',
+            visibility: 1
+        });
 
-            LocalNotifications.addListener('localNotificationActionPerformed', (event: any) => {
-                const targetPage = resolveTargetPageFromPush(event?.notification?.extra || event?.notification?.data);
-                if (targetPage && onNavigate) onNavigate(targetPage);
-            });
-        } catch (e) {
-            console.warn('Local notifications setup warning:', e);
-        }
+        await LocalNotifications.addListener('localNotificationActionPerformed', (event: any) => {
+            const targetPage = resolveTargetPageFromPush(event?.notification?.extra || event?.notification?.data);
+            if (targetPage && onNavigate) onNavigate(targetPage);
+        });
+    } catch {
+        // Sem local notifications, push nativo continua funcionando.
     }
 
-    PushNotifications.addListener('registration', async (token: any) => {
+    await PushNotifications.addListener('registration', async (token: Token) => {
         currentToken = token.value;
         await upsertPushToken(userId, token.value, 'android');
     });
 
-    PushNotifications.addListener('registrationError', (error: any) => {
+    await PushNotifications.addListener('registrationError', (error: any) => {
         console.warn('Push registration error:', error);
     });
 
-    PushNotifications.addListener('pushNotificationReceived', async (notification: any) => {
+    await PushNotifications.addListener('pushNotificationReceived', async (notification: PushNotificationSchema) => {
         playSound('notification');
         triggerHapticFeedback([16, 40, 16]);
 
-        // Em foreground, também cria notificação nativa na barra do Android.
-        if (LocalNotifications) {
-            try {
-                const when = Date.now() + 350;
-                const title = notification?.title || 'FarmoLink';
-                const body = notification?.body || notification?.data?.message || 'Nova atualização';
+        // Em foreground, cria notificacao local para aparecer na barra.
+        try {
+            const when = Date.now() + 350;
+            const title = notification?.title || 'FarmoLink';
+            const body = notification?.body || notification?.data?.message || 'Nova atualizacao';
 
-                await LocalNotifications.schedule({
-                    notifications: [
-                        {
-                            id: Math.floor(Date.now() % 2147483000),
-                            title,
-                            body,
-                            schedule: { at: new Date(when) },
-                            channelId: 'farmolink-important',
-                            extra: notification?.data || {}
-                        }
-                    ]
-                });
-            } catch (e) {
-                console.warn('Local notification schedule warning:', e);
-            }
+            await LocalNotifications.schedule({
+                notifications: [
+                    {
+                        id: Math.floor(Date.now() % 2147483000),
+                        title,
+                        body,
+                        schedule: { at: new Date(when) },
+                        channelId: 'farmolink-important',
+                        extra: notification?.data || {}
+                    }
+                ]
+            });
+        } catch {
+            // Ignora se local notification estiver indisponivel.
         }
     });
 
-    PushNotifications.addListener('pushNotificationActionPerformed', (action: any) => {
+    await PushNotifications.addListener('pushNotificationActionPerformed', (action: ActionPerformed) => {
         playSound('click');
         triggerHapticFeedback(12);
 
@@ -127,7 +111,8 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
     });
 
     removeListeners = async () => {
-        await PushNotifications.removeAllListeners();
+        await PushNotifications.removeAllListeners().catch(() => undefined);
+        await LocalNotifications.removeAllListeners().catch(() => undefined);
     };
 
     initializedForUserId = userId;

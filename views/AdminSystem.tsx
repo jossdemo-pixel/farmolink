@@ -29,6 +29,7 @@ export const AdminSettingsView = () => {
     const [broadcast, setBroadcast] = useState({ title: '', message: '', target: 'ALL' as 'ALL' | 'CUSTOMER' | 'PHARMACY' });
     const [broadcastMode, setBroadcastMode] = useState<'GLOBAL' | 'INDIVIDUAL'>('GLOBAL');
     const [recipientRoleFilter, setRecipientRoleFilter] = useState<'CUSTOMER' | 'PHARMACY' | 'ADMIN'>('CUSTOMER');
+    const [recipientSearchTerm, setRecipientSearchTerm] = useState<string>('');
     const [recipientOptions, setRecipientOptions] = useState<NotificationRecipient[]>([]);
     const [selectedRecipientId, setSelectedRecipientId] = useState<string>('');
 
@@ -105,13 +106,22 @@ export const AdminSettingsView = () => {
     }, []);
 
     useEffect(() => {
-        const loadRecipients = async () => {
-            const users = await fetchNotificationRecipients(recipientRoleFilter);
+        let isMounted = true;
+        const timer = window.setTimeout(async () => {
+            const users = await fetchNotificationRecipients(
+                recipientRoleFilter,
+                broadcastMode === 'INDIVIDUAL' ? recipientSearchTerm : ''
+            );
+            if (!isMounted) return;
             setRecipientOptions(users);
             setSelectedRecipientId(prev => (users.some(u => u.id === prev) ? prev : ''));
+        }, 250);
+
+        return () => {
+            isMounted = false;
+            window.clearTimeout(timer);
         };
-        loadRecipients();
-    }, [recipientRoleFilter]);
+    }, [recipientRoleFilter, recipientSearchTerm, broadcastMode]);
 
     const handleSaveConfig = () => {
         setLoading(true);
@@ -521,7 +531,11 @@ export const AdminSettingsView = () => {
                     <div className="space-y-4">
                         <div className="flex gap-2">
                             <button
-                                onClick={() => setBroadcastMode('GLOBAL')}
+                                onClick={() => {
+                                    setBroadcastMode('GLOBAL');
+                                    setRecipientSearchTerm('');
+                                    setSelectedRecipientId('');
+                                }}
                                 className={`px-4 py-2 rounded-xl text-xs font-black ${broadcastMode === 'GLOBAL' ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-500'}`}
                             >
                                 Global
@@ -535,7 +549,7 @@ export const AdminSettingsView = () => {
                         </div>
                         <input className="w-full p-3 border rounded-xl font-bold" placeholder="Assunto..." value={broadcast.title} onChange={e => setBroadcast({...broadcast, title: e.target.value})}/>
                         <textarea className="w-full p-3 border rounded-xl h-24 text-sm" placeholder="Mensagem..." value={broadcast.message} onChange={e => setBroadcast({...broadcast, message: e.target.value})}/>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 flex-wrap">
                             {broadcastMode === 'GLOBAL' ? (
                                 <select 
                                     className="p-3 border rounded-xl text-xs font-bold bg-gray-50"
@@ -549,7 +563,7 @@ export const AdminSettingsView = () => {
                             ) : (
                                 <>
                                     <select
-                                        className="p-3 border rounded-xl text-xs font-bold bg-gray-50"
+                                        className="p-3 border rounded-xl text-xs font-bold bg-gray-50 min-w-[130px]"
                                         value={recipientRoleFilter}
                                         onChange={e => setRecipientRoleFilter(e.target.value as any)}
                                     >
@@ -557,21 +571,28 @@ export const AdminSettingsView = () => {
                                         <option value="PHARMACY">Farmácias</option>
                                         <option value="ADMIN">Admin</option>
                                     </select>
+                                    <input
+                                        type="text"
+                                        className="p-3 border rounded-xl text-xs font-semibold bg-gray-50 flex-1 min-w-[180px]"
+                                        placeholder="Pesquisar por nome ou email..."
+                                        value={recipientSearchTerm}
+                                        onChange={e => setRecipientSearchTerm(e.target.value)}
+                                    />
                                     <select
-                                        className="flex-1 p-3 border rounded-xl text-xs font-bold bg-gray-50"
+                                        className="p-3 border rounded-xl text-xs font-bold bg-gray-50 flex-1 min-w-[240px]"
                                         value={selectedRecipientId}
                                         onChange={e => setSelectedRecipientId(e.target.value)}
                                     >
                                         <option value="">Selecionar utilizador...</option>
                                         {recipientOptions.map(u => (
                                             <option key={u.id} value={u.id}>
-                                                {u.name} {u.email ? `(${u.email})` : ''}
+                                                {u.name} - {u.email || 'sem email'}
                                             </option>
                                         ))}
                                     </select>
                                 </>
                             )}
-                            <Button className="flex-1 py-4 bg-orange-600 text-white" onClick={handleSendBroadcast} disabled={loading || !broadcast.title || !broadcast.message || (broadcastMode === 'INDIVIDUAL' && !selectedRecipientId)}>Enviar Notificação</Button>
+                            <Button className="flex-1 py-4 bg-orange-600 text-white min-w-[220px]" onClick={handleSendBroadcast} disabled={loading || !broadcast.title || !broadcast.message || (broadcastMode === 'INDIVIDUAL' && !selectedRecipientId)}>Enviar Notificação</Button>
                         </div>
                     </div>
                 </Card>
