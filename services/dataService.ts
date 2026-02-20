@@ -392,9 +392,21 @@ export const deletePartner = async (id: string) => {
 
 // --- SYSTEM ---
 
-export const sendSystemNotification = async (target: 'ALL' | 'CUSTOMER' | 'PHARMACY', title: string, message: string) => {
+export interface NotificationDispatchResult {
+    success: boolean;
+    error?: string;
+    details?: any;
+}
+
+export const sendSystemNotification = async (
+    target: 'ALL' | 'CUSTOMER' | 'PHARMACY',
+    title: string,
+    message: string
+): Promise<NotificationDispatchResult> => {
     try {
-        const { data, error } = await supabase.functions.invoke('push-dispatch', {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        const invokePayload: any = {
             body: {
                 title,
                 message,
@@ -403,11 +415,18 @@ export const sendSystemNotification = async (target: 'ALL' | 'CUSTOMER' | 'PHARM
                 page: target === 'PHARMACY' ? 'pharmacy-orders' : 'home',
                 persistNotification: true
             }
-        });
+        };
+        if (accessToken) {
+            invokePayload.headers = { Authorization: `Bearer ${accessToken}` };
+        }
+        const { data, error } = await supabase.functions.invoke('push-dispatch', invokePayload);
 
-        if (error) return false;
-        return !!data?.success;
-    } catch (e) { return false; }
+        if (error) return { success: false, error: error.message || 'Erro ao chamar push-dispatch.' };
+        if (!data?.success) return { success: false, error: data?.error || data?.reason || 'Push não enviado.', details: data };
+        return { success: true, details: data };
+    } catch (e: any) {
+        return { success: false, error: e?.message || 'Falha inesperada ao enviar comunicado.' };
+    }
 };
 
 export const sendSystemNotificationToUser = async (
@@ -415,11 +434,15 @@ export const sendSystemNotificationToUser = async (
     title: string,
     message: string,
     page: string = 'home'
-): Promise<boolean> => {
+): Promise<NotificationDispatchResult> => {
     try {
-        if (!userId || !title.trim() || !message.trim()) return false;
+        if (!userId || !title.trim() || !message.trim()) {
+            return { success: false, error: 'Destinatário, assunto e mensagem são obrigatórios.' };
+        }
 
-        const { data, error } = await supabase.functions.invoke('push-dispatch', {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        const invokePayload: any = {
             body: {
                 singleUserId: userId,
                 title: title.trim(),
@@ -428,12 +451,17 @@ export const sendSystemNotificationToUser = async (
                 page,
                 persistNotification: true
             }
-        });
+        };
+        if (accessToken) {
+            invokePayload.headers = { Authorization: `Bearer ${accessToken}` };
+        }
+        const { data, error } = await supabase.functions.invoke('push-dispatch', invokePayload);
 
-        if (error) return false;
-        return !!data?.success;
-    } catch {
-        return false;
+        if (error) return { success: false, error: error.message || 'Erro ao chamar push-dispatch.' };
+        if (!data?.success) return { success: false, error: data?.error || data?.reason || 'Push não enviado.', details: data };
+        return { success: true, details: data };
+    } catch (e: any) {
+        return { success: false, error: e?.message || 'Falha inesperada ao enviar comunicado.' };
     }
 };
 

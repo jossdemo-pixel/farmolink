@@ -200,7 +200,7 @@ export const AdminSettingsView = () => {
     const handleSendBroadcast = async () => {
         if (!broadcast.title || !broadcast.message) return;
         setLoading(true);
-        const success = broadcastMode === 'GLOBAL'
+        const result = broadcastMode === 'GLOBAL'
             ? await sendSystemNotification(broadcast.target, broadcast.title, broadcast.message)
             : await sendSystemNotificationToUser(
                 selectedRecipientId,
@@ -209,12 +209,13 @@ export const AdminSettingsView = () => {
                 recipientRoleFilter === 'PHARMACY' ? 'pharmacy-orders' : (recipientRoleFilter === 'ADMIN' ? 'admin-dashboard' : 'home')
             );
         setLoading(false);
-        if (success) {
+        if (result.success) {
             playSound('success');
             setToast({msg: "Comunicado enviado!", type: 'success'});
             setBroadcast({ ...broadcast, title: '', message: '' });
         } else {
-            setToast({msg: "Falha ao enviar comunicado.", type: 'error'});
+            const reason = result.error ? ` (${result.error})` : '';
+            setToast({msg: `Falha ao enviar comunicado.${reason}`, type: 'error'});
         }
     };
 
