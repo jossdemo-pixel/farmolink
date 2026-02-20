@@ -15,7 +15,6 @@ import { playSound } from './services/soundService';
 import { getCurrentPosition, calculateDistance } from './services/locationService';
 import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info, Trash2 } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
-import { SUPABASE_URL } from './services/supabaseClient';
 
 // --- Static View Imports ---
 import { HomeView, AllPharmaciesView, CartView, PharmacyProfileView } from './views/CustomerShop'; // NOVA VIEW
@@ -96,34 +95,20 @@ export const App: React.FC = () => {
 
     const probeInternet = useCallback(async (): Promise<boolean> => {
         if (!navigator.onLine) return false;
-
-        const endpoints = [
-            { url: `${SUPABASE_URL}/auth/v1/health`, mode: 'cors' as RequestMode },
-            { url: 'https://www.gstatic.com/generate_204', mode: 'no-cors' as RequestMode }
-        ];
-
-        for (const endpoint of endpoints) {
-            try {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 4500);
-
-                const res = await fetch(endpoint.url, {
-                    method: 'GET',
-                    cache: 'no-store',
-                    mode: endpoint.mode,
-                    signal: controller.signal
-                });
-
-                clearTimeout(timeout);
-
-                if (endpoint.mode === 'no-cors') return true;
-                if (res.ok) return true;
-            } catch (e) {
-                // tenta próximo endpoint
-            }
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4500);
+            await fetch('https://www.gstatic.com/generate_204', {
+                method: 'GET',
+                cache: 'no-store',
+                mode: 'no-cors',
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+            return true;
+        } catch (e) {
+            return false;
         }
-
-        return false;
     }, []);
 
     // Detecta fluxo de recuperação de senha via URL do Supabase.
@@ -226,8 +211,10 @@ export const App: React.FC = () => {
         document.addEventListener('visibilitychange', handleVisibility);
 
         const timer = setInterval(() => {
-            refreshConnectivity();
-        }, 12000);
+            if (document.visibilityState === 'visible') {
+                refreshConnectivity();
+            }
+        }, 90000);
         
         return () => {
             window.removeEventListener('online', handleOnline);

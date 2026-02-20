@@ -492,7 +492,10 @@ export const CartView = ({ items, pharmacies, updateQuantity, onRemoveItem, onCh
                         <div className="space-y-2 pt-4">
                             <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold"><span>Medicamentos ({items.length})</span><span>Kz {sub.toLocaleString()}</span></div>
                             <div className="flex justify-between text-emerald-200 text-xs uppercase font-bold"><span>Taxa de Entrega</span><span>Kz {fee.toLocaleString()}</span></div>
-                            <div className="flex justify-between items-center pt-6 text-3xl font-black border-t border-white/10"><span>Total</span><span>Kz {total.toLocaleString()}</span></div>
+                            <div className="flex justify-between items-end pt-6 border-t border-white/10">
+                                <span className="text-3xl font-black leading-none">Total</span>
+                                <span className="text-3xl font-black leading-none whitespace-nowrap text-right">Kz {total.toLocaleString()}</span>
+                            </div>
                         </div>
                         <Button onClick={handleConfirmCheckout} disabled={isProcessing || (type === 'DELIVERY' && !currentAddress)} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 rounded-[24px] font-black text-xl shadow-2xl shadow-emerald-500/20 active:scale-95 transition-all">
                             {isProcessing ? <Loader2 className="animate-spin" /> : "Confirmar Pedido"}
