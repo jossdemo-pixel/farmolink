@@ -140,6 +140,11 @@ const isProductIntent = (message: string) => {
   return /(medicamento|remedio|farmacia|preco|valor|quanto|custa|tem|stock|disponiv|reservar|comprar)/.test(msg);
 };
 
+const isSuggestionRequest = (message: string) => {
+  const msg = normalize(message);
+  return /(sugere|sugerir|recomenda|indica|indicar|mostra um|mostra uma|qual compro|qual comprar)/.test(msg);
+};
+
 const wantsKnowledgeSources = (message: string) => {
   const msg = normalize(message);
   return /(document|fontes|fonte|base de conhecimento|faq|origem da informacao|termos|privacidade)/.test(msg);
@@ -245,6 +250,7 @@ const cleanupReply = (text: string, fallback = "Posso ajudar com isso. Queres qu
   const sentences = output.split(/(?<=[.!?])\s+/).filter(Boolean);
   if (sentences.length > 4) output = sentences.slice(0, 4).join(" ");
   if (output.length > 700) output = `${output.slice(0, 697)}...`;
+  output = output.replace(/\bbanda\b/gi, "pessoa");
 
   return output.trim();
 };
@@ -423,6 +429,11 @@ serve(async (req) => {
       }
 
       const knowledgeContext = await buildKnowledgeContext(admin, userMessage);
+      const strictMatchedProducts = matchProducts(userMessage, productsContext);
+      const filteredProductsContext = strictMatchedProducts.slice(0, 5);
+      const allowSpecificProductSuggestion =
+        filteredProductsContext.length > 0 &&
+        (isProductIntent(userMessage) || isSuggestionRequest(userMessage));
       const historyParts = history.slice(-8).map((item: any) => ({
         role: normalize(String(item?.role || "")) === "model" ? "model" : "user",
         parts: [{ text: String(item?.content || item?.text || "").slice(0, 700) }],
@@ -436,7 +447,10 @@ serve(async (req) => {
       const prompt = [
         `Mensagem do utente: ${userMessage}`,
         `Nome do utente: ${firstName || "nao informado"}`,
-        `Contexto de produtos (quando relevante): ${JSON.stringify(productsContext).slice(0, 5000)}`,
+        `Produtos com correspondencia confiavel para esta mensagem: ${JSON.stringify(filteredProductsContext).slice(0, 3500)}`,
+        allowSpecificProductSuggestion
+          ? "Podes citar produtos especificos apenas desta lista filtrada."
+          : "Nao ha correspondencia segura de produto para esta mensagem. Nao cites nome de medicamento.",
         knowledgeContext ? `Base de conhecimento interna:\n${knowledgeContext}` : "Sem base interna relevante para esta pergunta.",
       ].join("\n\n");
 
@@ -453,9 +467,14 @@ serve(async (req) => {
             "Objetivo: responder de forma simples, clara, objetiva e humana.",
             greetRule,
             "Use portugues de Angola e frases curtas (1 a 4 frases).",
+            "Nao use girias como 'banda', 'bro', 'mano' ou equivalentes.",
+            "Se nao souber, diga claramente em 1 frase e ofereca apenas 1 proximo passo.",
+            "Evite dar voltas e evite sequencias longas de perguntas.",
             "Pode responder perguntas gerais normalmente, mesmo fora do app.",
             "Nao invente preco, stock, farmacia ou informacoes legais.",
             "Quando nao souber, diga de forma direta e ofereca proximo passo.",
+            "Nunca sugira medicamento especifico fora da lista filtrada de produtos correspondentes.",
+            "Se nao houver produto filtrado, nao recomende medicamento por classe clinica.",
             "Evite respostas roboticas, repetitivas ou muito formais.",
             "Seguranca clinica: nunca prescreva dose personalizada, antibiotico ou diagnostico.",
             "Se o tema for clinico sensivel, inclua 1 frase de cautela e orientacao para medico/farmaceutico.",

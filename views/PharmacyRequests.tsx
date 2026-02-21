@@ -104,7 +104,6 @@ export const PharmacyRequestsModule = ({ pharmacyId, requests: initialRequests, 
             .on('postgres_changes', { event: '*', schema: 'public', table: 'prescriptions' }, (payload) => {
                 if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
                     onRefresh(); 
-                    if (payload.eventType === 'INSERT') playSound('notification');
                 }
             })
             .subscribe();

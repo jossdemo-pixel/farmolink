@@ -16,6 +16,7 @@ import { getCurrentPosition, calculateDistance } from './services/locationServic
 import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileText, User as UserIcon, MessageCircle, Settings, Database, Image as ImageIcon, Wallet, Pill, History, ShieldCheck, Star, Megaphone, Info, Trash2 } from 'lucide-react';
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
 import { initializePushNotifications, teardownPushNotifications } from './services/pushService';
+import { supabase } from './services/supabaseClient';
 
 // --- Static View Imports ---
 import { HomeView, AllPharmaciesView, CartView, PharmacyProfileView } from './views/CustomerShop'; // NOVA VIEW
@@ -26,7 +27,7 @@ import { PrescriptionsListView } from './views/CustomerPrescriptionList';
 
 import { CustomerProfileView } from './views/CustomerProfile';
 import { SupportView } from './views/SupportView';
-import { PharmacyOverview, PharmacyOrdersModule } from './views/PharmacyMain';
+import { PharmacyOverview, PharmacyOrdersModule, PharmacyUrgentAlert } from './views/PharmacyMain';
 import { PharmacyRequestsModule } from './views/PharmacyRequests';
 import { PharmacySettingsView, PharmacyReviewsView, PharmacyPromotionsView } from './views/PharmacyConfig';
 import { PharmacyProductsView } from './views/PharmacyProductsView';
@@ -75,6 +76,9 @@ export const App: React.FC = () => {
     const [pendingCartQuantity, setPendingCartQuantity] = useState<number>(1);
     const [uxToast, setUxToast] = useState<{ msg: string; type: 'success' | 'info' } | null>(null);
     const lastCustomerPageRef = useRef<string>('home');
+    const pageRef = useRef<string>('home');
+    const [pharmacyUrgentAlert, setPharmacyUrgentAlert] = useState<{ type: 'ORDER' | 'RX', count: number } | null>(null);
+    const pharmacyAlarmIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const isPasswordRecoveryFlow = useCallback(() => {
         try {
@@ -433,6 +437,7 @@ export const App: React.FC = () => {
     }, [checkSession]);
 
     useEffect(() => {
+        pageRef.current = page;
         if (user?.role === UserRole.CUSTOMER && page !== 'cart') {
             lastCustomerPageRef.current = page;
         }
@@ -452,6 +457,100 @@ export const App: React.FC = () => {
             teardownPushNotifications();
         };
     }, [user?.id]);
+
+    useEffect(() => {
+        if (!user?.id) return;
+
+        const alertChannel = supabase
+            .channel(`global-alert-sound-${user.id}`)
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+                (payload: any) => {
+                    const type = String(payload?.new?.type || '').toUpperCase();
+
+                    if (user.role === UserRole.PHARMACY) {
+                        const isOrderAlert = type.startsWith('ORDER_');
+                        const isRxAlert = type.startsWith('RX_');
+                        const isOrderHandlingPage = pageRef.current === 'pharmacy-orders';
+                        const isRxHandlingPage = pageRef.current === 'pharmacy-requests';
+
+                        const shouldPlayOperational =
+                            (isOrderAlert && !isOrderHandlingPage) ||
+                            (isRxAlert && !isRxHandlingPage);
+
+                        if (shouldPlayOperational) {
+                            playSound('notification');
+                        }
+                        return;
+                    }
+
+                    if (user.role === UserRole.CUSTOMER) {
+                        const isOrderFlowAlert = type.startsWith('ORDER_');
+                        if (isOrderFlowAlert) {
+                            playSound('notification');
+                        }
+                    }
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(alertChannel);
+        };
+    }, [user?.id, user?.role]);
+
+    useEffect(() => {
+        if (!user || user.role !== UserRole.PHARMACY) {
+            setPharmacyUrgentAlert(null);
+            if (pharmacyAlarmIntervalRef.current) {
+                clearInterval(pharmacyAlarmIntervalRef.current);
+                pharmacyAlarmIntervalRef.current = null;
+            }
+            return;
+        }
+
+        const pendingOrders = orders.filter(o => o.status === OrderStatus.PENDING).length;
+        const pendingRx = prescriptions.filter(r =>
+            (r.status === 'WAITING_FOR_QUOTES' && !r.quotes?.some(q => q.pharmacyId === user.pharmacyId)) ||
+            r.status === 'UNDER_REVIEW'
+        ).length;
+
+        const isOnOrderHandlingPage = page === 'pharmacy-orders';
+        const isOnRxHandlingPage = page === 'pharmacy-requests';
+
+        if (pendingOrders > 0 && !isOnOrderHandlingPage) {
+            setPharmacyUrgentAlert({ type: 'ORDER', count: pendingOrders });
+            return;
+        }
+        if (pendingRx > 0 && !isOnRxHandlingPage) {
+            setPharmacyUrgentAlert({ type: 'RX', count: pendingRx });
+            return;
+        }
+        setPharmacyUrgentAlert(null);
+    }, [user, orders, prescriptions, page]);
+
+    useEffect(() => {
+        if (!user || user.role !== UserRole.PHARMACY || !pharmacyUrgentAlert) {
+            if (pharmacyAlarmIntervalRef.current) {
+                clearInterval(pharmacyAlarmIntervalRef.current);
+                pharmacyAlarmIntervalRef.current = null;
+            }
+            return;
+        }
+
+        if (!pharmacyAlarmIntervalRef.current) {
+            playSound('notification');
+            pharmacyAlarmIntervalRef.current = setInterval(() => playSound('notification'), 8000);
+        }
+
+        return () => {
+            if (pharmacyAlarmIntervalRef.current) {
+                clearInterval(pharmacyAlarmIntervalRef.current);
+                pharmacyAlarmIntervalRef.current = null;
+            }
+        };
+    }, [user, pharmacyUrgentAlert]);
 
     const handleLoginSuccess = (userData: User) => {
         setUser(userData);
@@ -516,6 +615,28 @@ export const App: React.FC = () => {
             console.warn("Falha ao atualizar pedidos/receitas:", err);
         }
     }, [user]);
+
+    useEffect(() => {
+        if (!user?.id || user.role !== UserRole.CUSTOMER) return;
+
+        const customerOrdersChannel = supabase
+            .channel(`app-customer-orders-${user.id}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${user.id}` },
+                (payload: any) => {
+                    if (payload?.eventType === 'UPDATE' || payload?.eventType === 'INSERT') {
+                        playSound('notification');
+                    }
+                    refreshOrdersAndPrescriptions();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(customerOrdersChannel);
+        };
+    }, [user?.id, user?.role, refreshOrdersAndPrescriptions]);
 
     const addToCartDirect = (product: Product, quantity: number = 1) => {
         const maxStock = typeof product.stock === 'number' ? product.stock : Infinity;
@@ -840,6 +961,21 @@ export const App: React.FC = () => {
                             ✕
                         </button>
                     </div>
+                </div>
+            )}
+
+            {user?.role === UserRole.PHARMACY && pharmacyUrgentAlert && (
+                <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[10002] w-[95%] max-w-3xl animate-fade-in">
+                    <PharmacyUrgentAlert
+                        alert={pharmacyUrgentAlert}
+                        onResolve={(target) => {
+                            if (pharmacyAlarmIntervalRef.current) {
+                                clearInterval(pharmacyAlarmIntervalRef.current);
+                                pharmacyAlarmIntervalRef.current = null;
+                            }
+                            setPage(target);
+                        }}
+                    />
                 </div>
             )}
 

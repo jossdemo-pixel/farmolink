@@ -366,6 +366,8 @@ ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescription_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.support_tickets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.push_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_banners ENABLE ROW LEVEL SECURITY;
@@ -433,6 +435,56 @@ CREATE POLICY "RX Pharmacy View" ON public.prescriptions FOR SELECT USING (
     status IN ('UNDER_REVIEW', 'WAITING_FOR_QUOTES')
 );
 
+-- POLÍTICAS SUPPORT_TICKETS
+DROP POLICY IF EXISTS "Support Ticket Select" ON public.support_tickets;
+CREATE POLICY "Support Ticket Select" ON public.support_tickets
+FOR SELECT
+USING (user_id = auth.uid() OR is_admin());
+DROP POLICY IF EXISTS "Support Ticket Insert" ON public.support_tickets;
+CREATE POLICY "Support Ticket Insert" ON public.support_tickets
+FOR INSERT
+WITH CHECK (user_id = auth.uid() OR is_admin());
+DROP POLICY IF EXISTS "Support Ticket Update" ON public.support_tickets;
+CREATE POLICY "Support Ticket Update" ON public.support_tickets
+FOR UPDATE
+USING (user_id = auth.uid() OR is_admin())
+WITH CHECK (user_id = auth.uid() OR is_admin());
+
+-- POLÍTICAS SUPPORT_MESSAGES
+DROP POLICY IF EXISTS "Support Message Select" ON public.support_messages;
+CREATE POLICY "Support Message Select" ON public.support_messages
+FOR SELECT
+USING (
+    EXISTS (
+        SELECT 1
+        FROM public.support_tickets st
+        WHERE st.id = support_messages.ticket_id
+        AND (st.user_id = auth.uid() OR is_admin())
+    )
+);
+DROP POLICY IF EXISTS "Support Message Insert" ON public.support_messages;
+CREATE POLICY "Support Message Insert" ON public.support_messages
+FOR INSERT
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM public.support_tickets st
+        WHERE st.id = support_messages.ticket_id
+        AND (
+            is_admin()
+            OR (
+                st.user_id = auth.uid()
+                AND sender_id = auth.uid()
+                AND sender_role <> 'ADMIN'
+            )
+            OR (
+                st.user_id = auth.uid()
+                AND sender_role = 'CUSTOMER'
+            )
+        )
+    )
+);
+
 -- POLÍTICAS ADMIN_BANNERS (Todos podem ver, só admin pode editar)
 DROP POLICY IF EXISTS "Banners Public View" ON public.admin_banners;
 CREATE POLICY "Banners Public View" ON public.admin_banners FOR SELECT USING (true);
@@ -478,6 +530,14 @@ DROP POLICY IF EXISTS "Push Tokens Self Update" ON public.push_tokens;
 CREATE POLICY "Push Tokens Self Update" ON public.push_tokens
 FOR UPDATE
 USING (user_id = auth.uid() OR is_admin())
+WITH CHECK (user_id = auth.uid() OR is_admin());
+
+-- Permite rebind seguro de token no mesmo dispositivo (ex.: testes com contas diferentes no mesmo Android).
+-- A linha antiga pode pertencer a outro user, mas o novo valor só pode ficar no auth.uid() atual.
+DROP POLICY IF EXISTS "Push Tokens Rebind By Token" ON public.push_tokens;
+CREATE POLICY "Push Tokens Rebind By Token" ON public.push_tokens
+FOR UPDATE
+USING (auth.role() = 'authenticated' OR is_admin())
 WITH CHECK (user_id = auth.uid() OR is_admin());
 
 -- POLÍTICAS NOTIFICATIONS (utente apenas as suas; admin pode tudo)

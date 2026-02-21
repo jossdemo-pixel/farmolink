@@ -287,48 +287,71 @@ export const saveCarouselSlide = async (slide: CarouselSlide): Promise<boolean> 
 
 // --- SUPPORT ---
 
-export const createSupportTicket = async (userId: string, name: string, email: string, subject: string, message: string) => {
+export interface SupportActionResult {
+    success: boolean;
+    error?: string;
+}
+
+export const createSupportTicket = async (
+    userId: string,
+    name: string,
+    email: string,
+    subject: string,
+    message: string
+): Promise<SupportActionResult> => {
     if (isOfflineNow()) {
         enqueueOfflineAction('support_ticket_create', { userId, name, email, subject, message });
-        return true;
+        return { success: true };
     }
     try {
         const { data: ticket, error: tError } = await supabase.from('support_tickets').insert([{
             user_id: userId, user_name: name, user_email: email, subject, status: 'OPEN'
         }]).select('id').single();
-        if (tError) throw tError;
+        if (tError) return { success: false, error: tError.message || 'Falha ao abrir chamado.' };
         
-        await supabase.from('support_messages').insert([{
+        const { error: mError } = await supabase.from('support_messages').insert([{
             ticket_id: ticket.id, sender_id: userId, sender_name: name, sender_role: 'CUSTOMER', message
         }]);
-        return true;
-    } catch (e) { return false; }
+        if (mError) return { success: false, error: mError.message || 'Chamado criado, mas a mensagem inicial falhou.' };
+        return { success: true };
+    } catch (e: any) {
+        return { success: false, error: e?.message || 'Falha inesperada ao abrir chamado.' };
+    }
 };
 
 export const fetchUserTickets = async (userId: string) => {
-    const { data } = await supabase.from('support_tickets').select('id, subject, status, created_at').eq('user_id', userId).order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('support_tickets').select('id, subject, status, created_at').eq('user_id', userId).order('created_at', { ascending: false });
+    if (error) console.error('Erro fetchUserTickets:', error);
     return data || [];
 };
 
 export const fetchAllSupportTickets = async () => {
-    const { data } = await supabase.from('support_tickets').select('id, user_name, user_email, subject, status, created_at').order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('support_tickets').select('id, user_name, user_email, subject, status, created_at').order('created_at', { ascending: false });
+    if (error) console.error('Erro fetchAllSupportTickets:', error);
     return data || [];
 };
 
 export const fetchTicketMessages = async (ticketId: string) => {
-    const { data } = await supabase.from('support_messages').select('id, sender_name, sender_role, message, created_at, sender_id').eq('ticket_id', ticketId).order('created_at', { ascending: true });
+    const { data, error } = await supabase.from('support_messages').select('id, sender_name, sender_role, message, created_at, sender_id').eq('ticket_id', ticketId).order('created_at', { ascending: true });
+    if (error) console.error('Erro fetchTicketMessages:', error);
     return data || [];
 };
 
-export const sendTicketMessage = async (ticketId: string, senderId: string, senderName: string, senderRole: string, message: string) => {
+export const sendTicketMessage = async (
+    ticketId: string,
+    senderId: string,
+    senderName: string,
+    senderRole: string,
+    message: string
+): Promise<SupportActionResult> => {
     if (isOfflineNow()) {
         enqueueOfflineAction('support_message_send', { ticketId, senderId, senderName, senderRole, message });
-        return true;
+        return { success: true };
     }
     const { error } = await supabase.from('support_messages').insert([{
         ticket_id: ticketId, sender_id: senderId, sender_name: senderName, sender_role: senderRole, message
     }]);
-    if (error) return false;
+    if (error) return { success: false, error: error.message || 'Falha ao enviar mensagem.' };
 
     // Quando o admin responde, dispara notificação imediata para o cliente.
     if (senderRole === 'ADMIN') {
@@ -356,12 +379,13 @@ export const sendTicketMessage = async (ticketId: string, senderId: string, send
         }
     }
 
-    return true;
+    return { success: true };
 };
 
-export const updateTicketStatus = async (ticketId: string, status: string) => {
+export const updateTicketStatus = async (ticketId: string, status: string): Promise<SupportActionResult> => {
     const { error } = await supabase.from('support_tickets').update({ status }).eq('id', ticketId);
-    return !error;
+    if (error) return { success: false, error: error.message || 'Falha ao atualizar status do chamado.' };
+    return { success: true };
 };
 
 // --- MARKETING ---
@@ -398,30 +422,98 @@ export interface NotificationDispatchResult {
     details?: any;
 }
 
+const extractEdgeInvokeError = async (error: any): Promise<string> => {
+    const fallback = error?.message || 'Erro ao chamar edge function.';
+    try {
+        const response = error?.context;
+        if (!response) return fallback;
+
+        const body = await response.clone().json().catch(async () => {
+            const text = await response.clone().text().catch(() => '');
+            return text ? { error: text } : null;
+        });
+
+        const detailed =
+            body?.error ||
+            body?.details ||
+            body?.reason ||
+            body?.message ||
+            body?.msg;
+
+        if (!detailed) return fallback;
+        return String(detailed);
+    } catch {
+        return fallback;
+    }
+};
+
+const isJwtEdgeError = (message: string): boolean => {
+    const msg = String(message || '').toLowerCase();
+    return (
+        msg.includes('invalid jwt') ||
+        msg.includes('jwt') ||
+        msg.includes('unauthorized') ||
+        msg.includes('token') && msg.includes('invalid')
+    );
+};
+
+const invokePushDispatchWithAutoRefresh = async (
+    body: Record<string, unknown>
+): Promise<{ data: any; error: string | null }> => {
+    const { data: firstSessionData } = await supabase.auth.getSession();
+    const firstToken = firstSessionData?.session?.access_token;
+    if (!firstToken) {
+        return { data: null, error: 'Sessao expirada. Entre novamente para enviar comunicados.' };
+    }
+
+    const first = await supabase.functions.invoke('push-dispatch', {
+        body,
+        headers: { Authorization: `Bearer ${firstToken}` }
+    });
+
+    if (!first.error) {
+        return { data: first.data, error: null };
+    }
+
+    const firstErrText = await extractEdgeInvokeError(first.error);
+    if (!isJwtEdgeError(firstErrText)) {
+        return { data: null, error: firstErrText };
+    }
+
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    const refreshedToken = refreshed?.session?.access_token;
+    if (!refreshedToken) {
+        return { data: null, error: 'Sessao expirada. Entre novamente para enviar comunicados.' };
+    }
+
+    const second = await supabase.functions.invoke('push-dispatch', {
+        body,
+        headers: { Authorization: `Bearer ${refreshedToken}` }
+    });
+
+    if (!second.error) {
+        return { data: second.data, error: null };
+    }
+
+    return { data: null, error: await extractEdgeInvokeError(second.error) };
+};
+
 export const sendSystemNotification = async (
     target: 'ALL' | 'CUSTOMER' | 'PHARMACY',
     title: string,
     message: string
 ): Promise<NotificationDispatchResult> => {
     try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData?.session?.access_token;
-        const invokePayload: any = {
-            body: {
-                title,
-                message,
-                type: 'SYSTEM',
-                target,
-                page: target === 'PHARMACY' ? 'pharmacy-orders' : 'home',
-                persistNotification: true
-            }
+        const body = {
+            title,
+            message,
+            type: 'SYSTEM',
+            target,
+            page: target === 'PHARMACY' ? 'pharmacy-orders' : 'home',
+            persistNotification: true
         };
-        if (accessToken) {
-            invokePayload.headers = { Authorization: `Bearer ${accessToken}` };
-        }
-        const { data, error } = await supabase.functions.invoke('push-dispatch', invokePayload);
-
-        if (error) return { success: false, error: error.message || 'Erro ao chamar push-dispatch.' };
+        const { data, error } = await invokePushDispatchWithAutoRefresh(body);
+        if (error) return { success: false, error };
         if (!data?.success) return { success: false, error: data?.error || data?.reason || 'Push não enviado.', details: data };
         return { success: true, details: data };
     } catch (e: any) {
@@ -440,24 +532,16 @@ export const sendSystemNotificationToUser = async (
             return { success: false, error: 'Destinatário, assunto e mensagem são obrigatórios.' };
         }
 
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData?.session?.access_token;
-        const invokePayload: any = {
-            body: {
-                singleUserId: userId,
-                title: title.trim(),
-                message: message.trim(),
-                type: 'SYSTEM',
-                page,
-                persistNotification: true
-            }
+        const body = {
+            singleUserId: userId,
+            title: title.trim(),
+            message: message.trim(),
+            type: 'SYSTEM',
+            page,
+            persistNotification: true
         };
-        if (accessToken) {
-            invokePayload.headers = { Authorization: `Bearer ${accessToken}` };
-        }
-        const { data, error } = await supabase.functions.invoke('push-dispatch', invokePayload);
-
-        if (error) return { success: false, error: error.message || 'Erro ao chamar push-dispatch.' };
+        const { data, error } = await invokePushDispatchWithAutoRefresh(body);
+        if (error) return { success: false, error };
         if (!data?.success) return { success: false, error: data?.error || data?.reason || 'Push não enviado.', details: data };
         return { success: true, details: data };
     } catch (e: any) {

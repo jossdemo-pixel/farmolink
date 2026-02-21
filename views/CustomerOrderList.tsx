@@ -88,7 +88,6 @@ export const CustomerOrdersView = ({
                 { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${customerId}` },
                 (payload) => {
                     if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-                        if (payload.eventType === 'UPDATE') playSound('notification');
                         onRefresh();
                     }
                 }

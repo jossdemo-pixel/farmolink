@@ -1,10 +1,10 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, Badge, Button } from '../components/UI';
 import { Order, OrderStatus, Pharmacy } from '../types';
 import { 
     fetchOrders, updateOrderStatus, togglePharmacyAvailability, 
-    togglePharmacyDelivery, fetchPharmacyById, fetchPrescriptionRequests, rejectOrderAndRestoreStock
+    togglePharmacyDelivery, fetchPharmacyById, rejectOrderAndRestoreStock
 } from '../services/dataService';
 import { fetchPharmacyInventory } from '../services/productService';
 import { supabase } from '../services/supabaseClient';
@@ -44,62 +44,30 @@ export const PharmacyUrgentAlert = ({ alert, onResolve }: { alert: {type: 'ORDER
 export const PharmacyOverview = ({ stats, pharmacyId, onRefresh, setView }: any) => {
     const [toggling, setToggling] = useState<string | null>(null);
     const [myPharmacy, setMyPharmacy] = useState<Pharmacy | null>(null);
-    const [urgentAlert, setUrgentAlert] = useState<{type: 'ORDER' | 'RX', count: number} | null>(null);
-    const soundIntervalRef = useRef<any>(null);
 
     useEffect(() => {
         if (!pharmacyId) return;
         loadMyPharmacy();
-        checkTasks();
 
         // CANAL REALTIME REFORÇADO: Escuta notificações do sistema para disparar alarme
         const channel = supabase
             .channel(`pharmacy-global-monitor-${pharmacyId}`)
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, () => {
-                onRefresh(); checkTasks();
+                onRefresh();
             })
             .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `pharmacy_id=eq.${pharmacyId}` }, () => {
-                onRefresh(); checkTasks();
+                onRefresh();
             })
             .subscribe();
 
         return () => { 
             supabase.removeChannel(channel);
-            if (soundIntervalRef.current) clearInterval(soundIntervalRef.current);
         };
     }, [pharmacyId]);
 
     const loadMyPharmacy = async () => {
         const data = await fetchPharmacyById(pharmacyId);
         if (data) setMyPharmacy(data);
-    };
-
-    const checkTasks = async () => {
-        const [orders, rx] = await Promise.all([
-            fetchOrders(pharmacyId),
-            fetchPrescriptionRequests('PHARMACY' as any, undefined, pharmacyId)
-        ]);
-        
-        const pOrders = orders.filter(o => o.status === OrderStatus.PENDING).length;
-        const pRx = rx.filter(r => (r.status === 'WAITING_FOR_QUOTES' && !r.quotes?.some(q => q.pharmacyId === pharmacyId)) || r.status === 'UNDER_REVIEW').length;
-
-        if (pOrders > 0) {
-            setUrgentAlert({ type: 'ORDER', count: pOrders });
-            startAlarm();
-        } else if (pRx > 0) {
-            setUrgentAlert({ type: 'RX', count: pRx });
-            startAlarm();
-        } else {
-            setUrgentAlert(null);
-            if (soundIntervalRef.current) clearInterval(soundIntervalRef.current);
-            soundIntervalRef.current = null;
-        }
-    };
-
-    const startAlarm = () => {
-        if (soundIntervalRef.current) return;
-        playSound('notification');
-        soundIntervalRef.current = setInterval(() => playSound('notification'), 8000);
     };
 
     const handleToggle = async (type: 'ONLINE' | 'DELIVERY') => {
@@ -118,12 +86,6 @@ export const PharmacyOverview = ({ stats, pharmacyId, onRefresh, setView }: any)
 
     return (
         <div className="space-y-6 animate-fade-in">
-            {urgentAlert && <PharmacyUrgentAlert alert={urgentAlert} onResolve={(target) => {
-                if (soundIntervalRef.current) clearInterval(soundIntervalRef.current);
-                soundIntervalRef.current = null;
-                setView(target);
-            }} />}
-
             <div className="bg-gradient-to-br from-blue-50 via-white to-cyan-100 p-6 rounded-[32px] shadow-lg border-0 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="flex-1 text-center md:text-left">
                     <div className="flex items-center justify-center md:justify-start gap-2">

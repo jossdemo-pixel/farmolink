@@ -15,6 +15,9 @@ type DispatchPayload = {
   message?: string;
   type?: string;
   page?: string;
+  audience?: "RX_TARGET_PHARMACY" | "ORDER_PHARMACY";
+  prescriptionId?: string;
+  orderId?: string;
   target?: "ALL" | ProfileRole;
   targetRole?: ProfileRole;
   singleUserId?: string;
@@ -49,55 +52,85 @@ const pemToArrayBuffer = (pem: string): ArrayBuffer => {
   return bytes.buffer;
 };
 
+const normalizePrivateKey = (raw: string): string => {
+  let key = String(raw || "").trim();
+  // Remove wrapping quotes accidentally persisted in secrets.
+  key = key.replace(/^"+|"+$/g, "");
+  // Handle escaped newlines saved as \\n or \n.
+  while (key.includes("\\\\n")) key = key.replace(/\\\\n/g, "\\n");
+  key = key.replace(/\\n/g, "\n");
+  return key.trim();
+};
+
 const createGoogleAccessToken = async (
   clientEmail: string,
   privateKeyPem: string,
 ): Promise<string | null> => {
-  const now = Math.floor(Date.now() / 1000);
-  const header = { alg: "RS256", typ: "JWT" };
-  const payload = {
-    iss: clientEmail,
-    scope: "https://www.googleapis.com/auth/firebase.messaging",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  };
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const header = { alg: "RS256", typ: "JWT" };
+    const payload = {
+      iss: clientEmail,
+      scope: "https://www.googleapis.com/auth/firebase.messaging",
+      aud: "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
+    };
 
-  const encodedHeader = base64UrlEncode(JSON.stringify(header));
-  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
-  const unsignedToken = `${encodedHeader}.${encodedPayload}`;
+    const encodedHeader = base64UrlEncode(JSON.stringify(header));
+    const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+    const unsignedToken = `${encodedHeader}.${encodedPayload}`;
 
-  const privateKey = await crypto.subtle.importKey(
-    "pkcs8",
-    pemToArrayBuffer(privateKeyPem),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+    const normalizedPem = normalizePrivateKey(privateKeyPem);
+    const privateKey = await crypto.subtle.importKey(
+      "pkcs8",
+      pemToArrayBuffer(normalizedPem),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
 
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    privateKey,
-    new TextEncoder().encode(unsignedToken),
-  );
+    const signature = await crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5",
+      privateKey,
+      new TextEncoder().encode(unsignedToken),
+    );
 
-  const jwt = `${unsignedToken}.${base64UrlEncode(new Uint8Array(signature))}`;
+    const jwt = `${unsignedToken}.${base64UrlEncode(new Uint8Array(signature))}`;
 
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
-    }),
-  });
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion: jwt,
+      }),
+    });
 
-  const tokenJson = await tokenRes.json().catch(() => ({}));
-  return tokenJson?.access_token || null;
+    const tokenJson = await tokenRes.json().catch(() => ({}));
+    return tokenJson?.access_token || null;
+  } catch (e) {
+    console.warn("FCM_KEY_PARSE_ERROR", (e as any)?.message || e);
+    return null;
+  }
+};
+
+const extractBearerToken = (headerValue: string) => {
+  const parts = String(headerValue || "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const match = parts[i].match(/^Bearer\s+(.+)$/i);
+    if (match?.[1]) return match[1].trim();
+  }
+
+  return "";
 };
 
 const getUserFromBearer = async (admin: any, authHeader: string) => {
-  const token = (authHeader || "").replace(/^Bearer\s+/i, "").trim();
+  const token = extractBearerToken(authHeader);
   if (!token) return null;
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data?.user?.id) return null;
@@ -179,6 +212,63 @@ const filterRecipientsForPharmacyActor = async (
   return recipients.filter((id) => allowed.has(id));
 };
 
+const safeJsonArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => String(v || "").trim()).filter(Boolean);
+};
+
+const resolveRecipientsForCustomerAudience = async (
+  admin: any,
+  actorId: string,
+  payload: DispatchPayload,
+): Promise<{ recipients: string[]; error: string | null }> => {
+  if (payload.audience === "RX_TARGET_PHARMACY" && payload.prescriptionId) {
+    const { data: rx, error: rxError } = await admin
+      .from("prescriptions")
+      .select("id, customer_id, target_pharmacies")
+      .eq("id", payload.prescriptionId)
+      .maybeSingle();
+
+    if (rxError || !rx?.id) return { recipients: [], error: "Prescription not found." };
+    if (String(rx.customer_id || "") !== actorId) return { recipients: [], error: "Forbidden." };
+
+    const pharmacyIds = safeJsonArray(rx.target_pharmacies);
+    if (!pharmacyIds.length) return { recipients: [], error: null };
+
+    const { data: users } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("role", "PHARMACY")
+      .in("pharmacy_id", pharmacyIds)
+      .limit(2000);
+
+    return { recipients: normalizeUniqueIds((users || []).map((u: any) => u.id)), error: null };
+  }
+
+  if (payload.audience === "ORDER_PHARMACY" && payload.orderId) {
+    const { data: order, error: orderError } = await admin
+      .from("orders")
+      .select("id, customer_id, pharmacy_id")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+
+    if (orderError || !order?.id) return { recipients: [], error: "Order not found." };
+    if (String(order.customer_id || "") !== actorId) return { recipients: [], error: "Forbidden." };
+    if (!order.pharmacy_id) return { recipients: [], error: null };
+
+    const { data: users } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("role", "PHARMACY")
+      .eq("pharmacy_id", String(order.pharmacy_id))
+      .limit(2000);
+
+    return { recipients: normalizeUniqueIds((users || []).map((u: any) => u.id)), error: null };
+  }
+
+  return { recipients: [], error: "Forbidden." };
+};
+
 const sendToFcmToken = async (
   accessToken: string,
   projectId: string,
@@ -240,12 +330,7 @@ serve(async (req) => {
     const projectId = Deno.env.get("FCM_PROJECT_ID") || "";
     const clientEmail = Deno.env.get("FCM_CLIENT_EMAIL") || "";
     const privateKey = (Deno.env.get("FCM_PRIVATE_KEY") || "").replace(/\\n/g, "\n");
-    if (!projectId || !clientEmail || !privateKey) {
-      return new Response(JSON.stringify({ error: "Missing FCM credentials for HTTP v1." }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const hasFcmCredentials = !!(projectId && clientEmail && privateKey);
 
     const authHeader = req.headers.get("authorization") || "";
     const currentUser = await getUserFromBearer(admin, authHeader);
@@ -279,21 +364,23 @@ serve(async (req) => {
     }
 
     let recipients = await resolveRecipients(admin, payload);
-    if (!recipients.length) {
-      return new Response(JSON.stringify({ success: true, sent: 0, failed: 0, reason: "no_recipients" }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
-    if (actor.role !== "ADMIN") {
+    if (actor.role === "CUSTOMER") {
+      const scoped = await resolveRecipientsForCustomerAudience(admin, currentUser.id, payload);
+      if (scoped.error) {
+        return new Response(JSON.stringify({ error: scoped.error }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      recipients = scoped.recipients;
+    } else if (actor.role !== "ADMIN") {
       if (actor.role !== "PHARMACY") {
         return new Response(JSON.stringify({ error: "Forbidden." }), {
           status: 403,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-
       const allowedRecipients = await filterRecipientsForPharmacyActor(
         admin,
         String(actor.pharmacy_id || ""),
@@ -309,6 +396,13 @@ serve(async (req) => {
       recipients = allowedRecipients;
     }
 
+    if (!recipients.length) {
+      return new Response(JSON.stringify({ success: true, sent: 0, failed: 0, reason: "no_recipients" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (persistNotification && recipients.length > 0) {
       const rows = recipients.map((userId) => ({
         user_id: userId,
@@ -320,12 +414,34 @@ serve(async (req) => {
       await admin.from("notifications").insert(rows);
     }
 
+    // Fallback: permite comunicados internos mesmo sem FCM configurado.
+    if (!hasFcmCredentials) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          sent: 0,
+          failed: 0,
+          inactive: 0,
+          recipients: recipients.length,
+          reason: "fcm_not_configured",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const accessToken = await createGoogleAccessToken(clientEmail, privateKey);
     if (!accessToken) {
-      return new Response(JSON.stringify({ error: "Could not obtain Google access token." }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          sent: 0,
+          failed: 0,
+          inactive: 0,
+          recipients: recipients.length,
+          reason: "fcm_auth_unavailable",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     const { data: tokens, error: tokensError } = await admin

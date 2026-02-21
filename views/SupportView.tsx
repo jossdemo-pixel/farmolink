@@ -65,14 +65,16 @@ export const SupportView = ({ user }: { user: User }) => {
         if (!subject || !initialMessage) return;
         setLoading(true);
         const isOffline = !navigator.onLine;
-        const success = await createSupportTicket(user.id, user.name, user.email, subject, initialMessage);
+        const result = await createSupportTicket(user.id, user.name, user.email, subject, initialMessage);
         setLoading(false);
-        if (success) {
+        if (result.success) {
             playSound('success');
             setToast({ msg: isOffline ? 'Sem internet: chamado guardado e sera enviado automaticamente.' : 'Chamado enviado com sucesso.', type: 'success' });
             setView('LIST');
             setSubject('');
             setInitialMessage('');
+        } else {
+            setToast({ msg: result.error || 'Nao foi possivel abrir o chamado.', type: 'error' });
         }
     };
 
@@ -81,11 +83,13 @@ export const SupportView = ({ user }: { user: User }) => {
         const isOffline = !navigator.onLine;
         const msg = newMessage;
         setNewMessage('');
-        const success = await sendTicketMessage(activeTicket.id, user.id, user.name, user.role, msg);
-        if (success) {
+        const result = await sendTicketMessage(activeTicket.id, user.id, user.name, user.role, msg);
+        if (result.success) {
             if (!isOffline) loadMessages();
             else setToast({ msg: 'Sem internet: mensagem guardada na fila para envio.', type: 'success' });
             playSound('click');
+        } else {
+            setToast({ msg: result.error || 'Falha ao enviar mensagem.', type: 'error' });
         }
     };
 

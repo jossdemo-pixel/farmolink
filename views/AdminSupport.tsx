@@ -58,13 +58,13 @@ export const AdminSupportView = ({ user }: { user: User }) => {
         const msg = reply;
         setReply('');
         
-        const success = await sendTicketMessage(selectedTicket.id, user.id, 'Suporte FarmoLink', 'ADMIN', msg);
+        const result = await sendTicketMessage(selectedTicket.id, user.id, 'Suporte FarmoLink', 'ADMIN', msg);
         
-        if (success) {
+        if (result.success) {
             loadMessages();
             playSound('click');
         } else {
-            setToast({msg: "Erro ao enviar resposta.", type: 'error'});
+            setToast({msg: result.error || "Erro ao enviar resposta.", type: 'error'});
         }
     };
 
@@ -73,15 +73,15 @@ export const AdminSupportView = ({ user }: { user: User }) => {
 
         setActionLoading(true);
         try {
-            const success = await updateTicketStatus(id, 'RESOLVED');
-            if (success) {
+            const statusResult = await updateTicketStatus(id, 'RESOLVED');
+            if (statusResult.success) {
                 await sendTicketMessage(id, user.id, 'Sistema', 'ADMIN', "--- CHAMADO ENCERRADO PELO SUPORTE ---");
                 playSound('success');
                 setToast({ msg: "Chamado finalizado!", type: 'success' });
                 setSelectedTicket(null); 
                 await loadTickets();
             } else {
-                setToast({ msg: "Falha ao atualizar status no banco.", type: 'error' });
+                setToast({ msg: statusResult.error || "Falha ao atualizar status no banco.", type: 'error' });
             }
         } catch (e) {
             setToast({ msg: "Erro de conexão.", type: 'error' });
@@ -154,7 +154,7 @@ export const AdminSupportView = ({ user }: { user: User }) => {
                             <div className="p-4 sm:p-6 bg-gray-50 border-b flex justify-between items-center shrink-0 z-10">
                                 <div className="flex items-center gap-3 min-w-0">
                                     <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center font-black shrink-0">
-                                        {selectedTicket.user_name.charAt(0)}
+                                        {(selectedTicket.user_name || selectedTicket.user_email || 'U').charAt(0)}
                                     </div>
                                     <div className="min-w-0">
                                         <h3 className="font-black text-gray-800 text-sm truncate">{selectedTicket.subject}</h3>

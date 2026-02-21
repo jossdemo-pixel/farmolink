@@ -211,7 +211,25 @@ export const AdminSettingsView = () => {
         setLoading(false);
         if (result.success) {
             playSound('success');
-            setToast({msg: "Comunicado enviado!", type: 'success'});
+            const reason = String(result.details?.reason || '');
+            const recipients = Number(result.details?.recipients || 0);
+            if (reason === 'no_tokens') {
+                setToast({
+                    msg: recipients > 0
+                        ? `Comunicado enviado no app para ${recipients} utilizador(es). Nenhum dispositivo movel registado para push neste publico.`
+                        : 'Comunicado enviado no app. Nenhum dispositivo movel registado para push.',
+                    type: 'success'
+                });
+            } else if (reason === 'fcm_auth_unavailable' || reason === 'fcm_not_configured') {
+                setToast({
+                    msg: recipients > 0
+                        ? `Comunicado enviado no app para ${recipients} utilizador(es). Push movel indisponivel no momento.`
+                        : 'Comunicado enviado no app. Push movel indisponivel no momento.',
+                    type: 'success'
+                });
+            } else {
+                setToast({msg: "Comunicado enviado!", type: 'success'});
+            }
             setBroadcast({ ...broadcast, title: '', message: '' });
         } else {
             const reason = result.error ? ` (${result.error})` : '';

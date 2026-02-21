@@ -84,30 +84,71 @@ const isAuthError = (error: any, data?: any): boolean => {
   );
 };
 
+const extractEdgeInvokeError = async (error: any, data?: any): Promise<Error> => {
+  if (data?.details || data?.error) {
+    return new Error(data?.details || data?.error);
+  }
+
+  const fallback = error?.message || 'Falha na Edge Function';
+  try {
+    const response = error?.context;
+    if (!response) return new Error(fallback);
+
+    const body = await response.clone().json().catch(async () => {
+      const text = await response.clone().text().catch(() => '');
+      return text ? { error: text } : null;
+    });
+
+    const detailed =
+      body?.details ||
+      body?.error ||
+      body?.reason ||
+      body?.message ||
+      body?.msg;
+
+    return new Error(detailed ? String(detailed) : fallback);
+  } catch {
+    return new Error(fallback);
+  }
+};
+
 const invokeGemini = async (
   body: Record<string, unknown>,
   retryOnAuthError = false
 ): Promise<{ data: any; error: any; authFailed: boolean }> => {
-  const first = await supabase.functions.invoke('gemini', { body });
+  const { data: firstSessionData } = await supabase.auth.getSession();
+  const firstToken = firstSessionData?.session?.access_token;
+  const firstInvokePayload: any = { body };
+  if (firstToken) {
+    firstInvokePayload.headers = { Authorization: `Bearer ${firstToken}` };
+  }
+
+  const first = await supabase.functions.invoke('gemini', firstInvokePayload);
 
   if (!first.error && !first.data?.error) {
     return { data: first.data, error: null, authFailed: false };
   }
 
   const firstError =
-    first.error || new Error(first.data?.details || first.data?.error || 'Falha na Edge Function');
+    first.error ? await extractEdgeInvokeError(first.error, first.data) : await extractEdgeInvokeError(null, first.data);
   const firstAuthFailed = isAuthError(firstError, first.data);
 
   if (retryOnAuthError && firstAuthFailed) {
-    await supabase.auth.refreshSession();
-    const second = await supabase.functions.invoke('gemini', { body });
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    const refreshedToken = refreshed?.session?.access_token;
+    const secondInvokePayload: any = { body };
+    if (refreshedToken) {
+      secondInvokePayload.headers = { Authorization: `Bearer ${refreshedToken}` };
+    }
+
+    const second = await supabase.functions.invoke('gemini', secondInvokePayload);
 
     if (!second.error && !second.data?.error) {
       return { data: second.data, error: null, authFailed: false };
     }
 
     const secondError =
-      second.error || new Error(second.data?.details || second.data?.error || 'Falha na Edge Function');
+      second.error ? await extractEdgeInvokeError(second.error, second.data) : await extractEdgeInvokeError(null, second.data);
 
     return {
       data: second.data,
@@ -267,6 +308,16 @@ export const getChatSession = () => {
 
         if (error?.name === 'AbortError') {
           return { text: 'Tempo limite excedido. Tente novamente em instantes.' };
+        }
+
+        const normalizedError = String(error?.message || '').toLowerCase();
+        if (
+          normalizedError.includes('503') ||
+          normalizedError.includes('unavailable') ||
+          normalizedError.includes('high demand') ||
+          normalizedError.includes('experiencing high demand')
+        ) {
+          return { text: 'O FarmoBot está com alta procura no momento. Tenta novamente em 1-2 minutos.' };
         }
 
         return { text: `Erro: ${error?.message || 'Falha de conexao'}.` };

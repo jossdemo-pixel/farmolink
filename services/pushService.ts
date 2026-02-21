@@ -45,8 +45,6 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
         visibility: 1
     }).catch(() => undefined);
 
-    await PushNotifications.register();
-
     try {
         await LocalNotifications.requestPermissions();
         await LocalNotifications.createChannel({
@@ -68,7 +66,10 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
 
     await PushNotifications.addListener('registration', async (token: Token) => {
         currentToken = token.value;
-        await upsertPushToken(userId, token.value, 'android');
+        const saved = await upsertPushToken(userId, token.value, 'android');
+        if (!saved) {
+            console.warn('Falha ao gravar token push no backend.');
+        }
     });
 
     await PushNotifications.addListener('registrationError', (error: any) => {
@@ -109,6 +110,10 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
         const targetPage = resolveTargetPageFromPush(action.notification);
         if (targetPage && onNavigate) onNavigate(targetPage);
     });
+
+    // Regista depois dos listeners para nao perder o evento "registration"
+    // em dispositivos que retornam token imediatamente.
+    await PushNotifications.register();
 
     removeListeners = async () => {
         await PushNotifications.removeAllListeners().catch(() => undefined);

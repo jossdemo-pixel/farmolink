@@ -33,6 +33,7 @@ export const PharmacySettingsView = ({ pharmacyId, onComplete }: { pharmacyId?: 
     ];
 
     useEffect(() => { if(pharmacyId) loadData(); }, [pharmacyId]);
+
     
     const loadData = async () => {
         const pharm = await fetchPharmacyById(pharmacyId!);

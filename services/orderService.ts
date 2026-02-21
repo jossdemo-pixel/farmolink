@@ -1,4 +1,4 @@
-
+﻿
 import { supabase, safeQuery } from './supabaseClient';
 import { Order, OrderStatus, PrescriptionRequest, PrescriptionQuote, QuotedItem, UserRole, PrescriptionStatus, User } from '../types';
 
@@ -59,6 +59,77 @@ const getCommissionRateForPharmacy = async (pharmacyId: string): Promise<number>
     }
 };
 
+const extractEdgeInvokeError = async (error: any): Promise<string> => {
+    const fallback = error?.message || 'Falha ao enviar push.';
+    try {
+        const response: Response | undefined = error?.context;
+        if (!response) return fallback;
+
+        const body = await response.clone().json().catch(async () => {
+            const text = await response.clone().text().catch(() => '');
+            return text ? { error: text } : null;
+        });
+
+        const detailed =
+            body?.error ||
+            body?.details ||
+            body?.reason ||
+            body?.message ||
+            body?.msg;
+
+        return detailed ? String(detailed) : fallback;
+    } catch {
+        return fallback;
+    }
+};
+
+const isJwtEdgeError = (message: string): boolean => {
+    const msg = String(message || '').toLowerCase();
+    return (
+        msg.includes('invalid jwt') ||
+        msg.includes('jwt') ||
+        msg.includes('unauthorized') ||
+        (msg.includes('token') && msg.includes('invalid'))
+    );
+};
+
+const invokePushDispatchWithAutoRefresh = async (
+    body: Record<string, unknown>
+): Promise<{ data: any; error: string | null }> => {
+    const { data: firstSessionData } = await supabase.auth.getSession();
+    const firstToken = firstSessionData?.session?.access_token;
+    if (!firstToken) {
+        return { data: null, error: 'Sessao expirada para notificacoes push.' };
+    }
+
+    const first = await supabase.functions.invoke('push-dispatch', {
+        body,
+        headers: { Authorization: `Bearer ${firstToken}` }
+    });
+
+    if (!first.error) return { data: first.data, error: null };
+
+    const firstErrText = await extractEdgeInvokeError(first.error);
+    if (!isJwtEdgeError(firstErrText)) {
+        return { data: null, error: firstErrText };
+    }
+
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    const refreshedToken = refreshed?.session?.access_token;
+    if (!refreshedToken) {
+        return { data: null, error: 'Sessao expirada para notificacoes push.' };
+    }
+
+    const second = await supabase.functions.invoke('push-dispatch', {
+        body,
+        headers: { Authorization: `Bearer ${refreshedToken}` }
+    });
+
+    if (!second.error) return { data: second.data, error: null };
+
+    return { data: null, error: await extractEdgeInvokeError(second.error) };
+};
+
 const pushOrderStatusUpdateToCustomer = async (
     customerId: string,
     nextStatus: OrderStatus,
@@ -67,7 +138,7 @@ const pushOrderStatusUpdateToCustomer = async (
     const copy: Record<string, { title: string; message: string; page: string }> = {
         [OrderStatus.PREPARING]: {
             title: 'PEDIDO EM PREPARACAO',
-            message: 'A farmácia já começou a preparar o teu pedido.',
+            message: 'A farmÃ¡cia jÃ¡ comeÃ§ou a preparar o teu pedido.',
             page: 'orders'
         },
         [OrderStatus.OUT_FOR_DELIVERY]: {
@@ -77,17 +148,17 @@ const pushOrderStatusUpdateToCustomer = async (
         },
         [OrderStatus.READY_FOR_PICKUP]: {
             title: 'PEDIDO PRONTO',
-            message: 'O teu pedido está pronto para levantamento na farmácia.',
+            message: 'O teu pedido estÃ¡ pronto para levantamento na farmÃ¡cia.',
             page: 'orders'
         },
         [OrderStatus.COMPLETED]: {
             title: 'PEDIDO CONCLUIDO',
-            message: 'Pedido concluído com sucesso. Obrigado por comprar na FarmoLink.',
+            message: 'Pedido concluÃ­do com sucesso. Obrigado por comprar na FarmoLink.',
             page: 'orders'
         },
         [OrderStatus.REJECTED]: {
             title: 'PEDIDO RECUSADO',
-            message: 'A farmácia recusou o pedido. Verifica os detalhes no histórico.',
+            message: 'A farmÃ¡cia recusou o pedido. Verifica os detalhes no histÃ³rico.',
             page: 'orders'
         },
         [OrderStatus.CANCELLED]: {
@@ -100,16 +171,17 @@ const pushOrderStatusUpdateToCustomer = async (
     const payload = copy[nextStatus];
     if (!payload) return;
 
-    await supabase.functions.invoke('push-dispatch', {
-        body: {
-            singleUserId: customerId,
-            title: payload.title,
-            message: payload.message,
-            type: orderType === 'PICKUP' ? 'ORDER_PICKUP' : 'ORDER_STATUS',
-            page: payload.page,
-            persistNotification: true
-        }
+    const result = await invokePushDispatchWithAutoRefresh({
+        singleUserId: customerId,
+        title: payload.title,
+        message: payload.message,
+        type: orderType === 'PICKUP' ? 'ORDER_PICKUP' : 'ORDER_STATUS',
+        page: payload.page,
+        persistNotification: true
     });
+    if (result.error) {
+        console.warn('Push status cliente falhou:', result.error);
+    }
 };
 
 export const createPrescriptionRequest = async (
@@ -129,7 +201,7 @@ export const createPrescriptionRequest = async (
 
     const isDuplicate = await checkPrescriptionDuplicate(customerId, imageUrl);
     if (isDuplicate) {
-        return { success: false, error: "Esta receita já foi enviada e está a ser tratada.", isDuplicate: true };
+        return { success: false, error: "Esta receita jÃ¡ foi enviada e estÃ¡ a ser tratada.", isDuplicate: true };
     }
 
     let finalStatus: PrescriptionStatus = 'WAITING_FOR_QUOTES';
@@ -137,21 +209,39 @@ export const createPrescriptionRequest = async (
     expiresAt.setHours(expiresAt.getHours() + 48);
     const cleanTargets = Array.isArray(pharmacyIds) ? pharmacyIds : [];
 
-    const { error } = await supabase.from('prescriptions').insert([{
+    const { data: createdRx, error } = await supabase.from('prescriptions').insert([{
         customer_id: customerId, 
         image_url: imageUrl, 
         image_hash: generateImageHash(imageUrl),
-        notes: notes || (cleanTargets.length > 0 ? 'Pedido Manual' : 'Análise por IA'), 
+        notes: notes || (cleanTargets.length > 0 ? 'Pedido Manual' : 'AnÃ¡lise por IA'), 
         status: finalStatus, 
         target_pharmacies: cleanTargets, 
         ai_metadata: aiMetadata || { confidence: 1, extracted_text: 'Envio Manual', is_validated: true, suggested_items: [] },
         expires_at: expiresAt.toISOString()
-    }]);
+    }]).select('id').maybeSingle();
     
     if (error) {
         console.error("Erro insert RX:", error);
         return { success: false, error: "Erro ao guardar no sistema. Tente de novo." };
     }
+
+    if (createdRx?.id && cleanTargets.length > 0) {
+        try {
+            const result = await invokePushDispatchWithAutoRefresh({
+                audience: 'RX_TARGET_PHARMACY',
+                prescriptionId: createdRx.id,
+                title: 'NOVA RECEITA PARA COTACAO',
+                message: 'Nova receita recebida para cotacao.',
+                type: 'RX_QUOTE',
+                page: 'pharmacy-requests',
+                persistNotification: false
+            });
+            if (result.error) console.warn('Push nova receita falhou:', result.error);
+        } catch (e) {
+            console.warn('Falha ao enviar push da nova receita:', e);
+        }
+    }
+
     return { success: true };
 };
 
@@ -177,7 +267,7 @@ export const fetchPrescriptionRequests = async (role: UserRole, userId?: string,
         } 
         
         if (role === UserRole.PHARMACY && pharmacyId) {
-            // Primeiro, busca receitas da farmácia sem limite pesado
+            // Primeiro, busca receitas da farmÃ¡cia sem limite pesado
             const { data: allRequests } = await supabase
                 .from('prescriptions')
                 .select(rxSelect)
@@ -197,7 +287,7 @@ export const fetchPrescriptionRequests = async (role: UserRole, userId?: string,
                 return isTargeted || hasMyQuote || isRejectedByMe;
             });
 
-            // Aplica paginação local
+            // Aplica paginaÃ§Ã£o local
             return filtered.slice(page * pageSize, (page + 1) * pageSize);
         }
         return [];
@@ -257,8 +347,8 @@ export const validatePrescriptionAI = async (
         const updateData: any = { triaged_at: new Date().toISOString() };
         if (isIllegible) {
             updateData.status = 'ILLEGIBLE';
-            updateData.notes = customNotes || 'Letra Ilegível: Sinalizado por um Farmacêutico.';
-            updateData.ai_metadata = { validated_by: pharmacyId, is_validated: true, extracted_text: customNotes || "Ilegível" };
+            updateData.notes = customNotes || 'Letra IlegÃ­vel: Sinalizado por um FarmacÃªutico.';
+            updateData.ai_metadata = { validated_by: pharmacyId, is_validated: true, extracted_text: customNotes || "IlegÃ­vel" };
         } else {
             updateData.status = 'WAITING_FOR_QUOTES';
             updateData.ai_metadata = { is_validated: true, validated_by: pharmacyId, suggested_items: items, confidence: 1.0 };
@@ -293,17 +383,15 @@ export const sendPrescriptionQuote = async (
     await supabase.from('prescriptions').update({ status: 'WAITING_FOR_QUOTES' }).eq('id', prescriptionId).neq('status', 'COMPLETED');
 
     if (rxBefore?.customer_id) {
-        await supabase.functions.invoke('push-dispatch', {
-            body: {
-                singleUserId: rxBefore.customer_id,
-                title: 'ORCAMENTO RECEBIDO',
-                message: `${pharmacyName} respondeu a tua receita com um orçamento.`,
-                type: 'RX_RESPONSE',
-                page: 'prescriptions',
-                // A trigger SQL já tenta persistir em notifications. Aqui só garantimos push.
-                persistNotification: false
-            }
+        const result = await invokePushDispatchWithAutoRefresh({
+            singleUserId: rxBefore.customer_id,
+            title: 'ORCAMENTO RECEBIDO',
+            message: `${pharmacyName} respondeu a tua receita com um orÃ§amento.`,
+            type: 'RX_RESPONSE',
+            page: 'prescriptions',
+            persistNotification: false
         });
+        if (result.error) console.warn('Push resposta de cotacao falhou:', result.error);
     }
 
     return true;
@@ -319,8 +407,8 @@ export const acceptQuoteAndCreateOrder = async (
         const commissionRate = await getCommissionRateForPharmacy(quote.pharmacyId);
         const commissionAmount = Number(quote.totalPrice) * (commissionRate / 100);
 
-        // AUTONOMIA TOTAL: O pedido é criado com os itens snapshots da cotação.
-        // Se o ID for 'rx-...', o trigger do banco apenas ignorará o desconto de stock.
+        // AUTONOMIA TOTAL: O pedido Ã© criado com os itens snapshots da cotaÃ§Ã£o.
+        // Se o ID for 'rx-...', o trigger do banco apenas ignorarÃ¡ o desconto de stock.
         const orderPayload = {
             customer_id: customer.id,
             customer_name: customer.name,
@@ -342,11 +430,28 @@ export const acceptQuoteAndCreateOrder = async (
             commission_status: 'PENDING'
         };
 
-        const { error: orderError } = await supabase.from('orders').insert([orderPayload]);
+        const { data: createdOrder, error: orderError } = await supabase.from('orders').insert([orderPayload]).select('id').maybeSingle();
         if (orderError) throw orderError;
 
         await supabase.from('prescriptions').update({ status: 'COMPLETED' }).eq('id', prescriptionId);
         await supabase.from('prescription_quotes').update({ status: 'ACCEPTED' }).eq('id', quote.id);
+
+        if (createdOrder?.id) {
+            try {
+                const result = await invokePushDispatchWithAutoRefresh({
+                    audience: 'ORDER_PHARMACY',
+                    orderId: createdOrder.id,
+                    title: 'PEDIDO CONFIRMADO',
+                    message: 'Um cliente confirmou a tua cotacao.',
+                    type: 'ORDER_CONFIRMED',
+                    page: 'pharmacy-orders',
+                    persistNotification: true
+                });
+                if (result.error) console.warn('Push pedido confirmado falhou:', result.error);
+            } catch (e) {
+                console.warn('Falha ao enviar push de pedido confirmado:', e);
+            }
+        }
 
         return { success: true };
     } catch (err: any) {
@@ -367,8 +472,23 @@ export const createOrder = async (order: Omit<Order, 'id' | 'date'>): Promise<{ 
       address: order.address, commission_amount: commissionAmount, commission_status: 'PENDING'
     };
     if (order.customerId) payload.customer_id = order.customerId;
-    const { error } = await supabase.from('orders').insert([payload]);
-    return { success: !error };
+    const { data: createdOrder, error } = await supabase.from('orders').insert([payload]).select('id').maybeSingle();
+    if (error) return { success: false, error: error.message || "Falha ao fechar pedido." };
+
+    if (createdOrder?.id) {
+      const result = await invokePushDispatchWithAutoRefresh({
+        audience: 'ORDER_PHARMACY',
+        orderId: createdOrder.id,
+        title: 'NOVO PEDIDO DE UTENTE',
+        message: 'Recebeste um novo pedido no app.',
+        type: 'ORDER_NEW',
+        page: 'pharmacy-orders',
+        persistNotification: true
+      });
+      if (result.error) console.warn('Push novo pedido falhou:', result.error);
+    }
+
+    return { success: true };
   } catch { return { success: false, error: "Falha ao fechar pedido." }; }
 };
 
@@ -423,3 +543,4 @@ export const fetchOrders = async (pharmacyId?: string, customerId?: string): Pro
         commissionPaidAmount: Number(o.commission_paid_amount || 0)
     }));
 };
+
