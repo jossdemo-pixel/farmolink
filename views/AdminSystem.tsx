@@ -26,7 +26,12 @@ export const AdminSettingsView = () => {
     
     // Configurações de Rede
     const [config, setConfig] = useState({ commissionRate: 10, minOrderValue: 2000, supportWhatsapp: '244923123456', supportEmail: 'ajuda@farmolink.ao' });
-    const [broadcast, setBroadcast] = useState({ title: '', message: '', target: 'ALL' as 'ALL' | 'CUSTOMER' | 'PHARMACY' });
+    const [broadcast, setBroadcast] = useState({
+        title: '',
+        message: '',
+        target: 'ALL' as 'ALL' | 'CUSTOMER' | 'PHARMACY',
+        category: 'GENERAL' as 'GENERAL' | 'MARKETING'
+    });
     const [broadcastMode, setBroadcastMode] = useState<'GLOBAL' | 'INDIVIDUAL'>('GLOBAL');
     const [recipientRoleFilter, setRecipientRoleFilter] = useState<'CUSTOMER' | 'PHARMACY' | 'ADMIN'>('CUSTOMER');
     const [recipientSearchTerm, setRecipientSearchTerm] = useState<string>('');
@@ -201,12 +206,13 @@ export const AdminSettingsView = () => {
         if (!broadcast.title || !broadcast.message) return;
         setLoading(true);
         const result = broadcastMode === 'GLOBAL'
-            ? await sendSystemNotification(broadcast.target, broadcast.title, broadcast.message)
+            ? await sendSystemNotification(broadcast.target, broadcast.title, broadcast.message, broadcast.category)
             : await sendSystemNotificationToUser(
                 selectedRecipientId,
                 broadcast.title,
                 broadcast.message,
-                recipientRoleFilter === 'PHARMACY' ? 'pharmacy-orders' : (recipientRoleFilter === 'ADMIN' ? 'admin-dashboard' : 'home')
+                recipientRoleFilter === 'PHARMACY' ? 'pharmacy-orders' : (recipientRoleFilter === 'ADMIN' ? 'admin-dashboard' : 'home'),
+                broadcast.category
             );
         setLoading(false);
         if (result.success) {
@@ -569,6 +575,14 @@ export const AdminSettingsView = () => {
                         <input className="w-full p-3 border rounded-xl font-bold" placeholder="Assunto..." value={broadcast.title} onChange={e => setBroadcast({...broadcast, title: e.target.value})}/>
                         <textarea className="w-full p-3 border rounded-xl h-24 text-sm" placeholder="Mensagem..." value={broadcast.message} onChange={e => setBroadcast({...broadcast, message: e.target.value})}/>
                         <div className="flex gap-2 flex-wrap">
+                            <select
+                                className="p-3 border rounded-xl text-xs font-bold bg-gray-50 min-w-[150px]"
+                                value={broadcast.category}
+                                onChange={e => setBroadcast({...broadcast, category: e.target.value as 'GENERAL' | 'MARKETING'})}
+                            >
+                                <option value="GENERAL">Categoria: Geral</option>
+                                <option value="MARKETING">Categoria: Marketing</option>
+                            </select>
                             {broadcastMode === 'GLOBAL' ? (
                                 <select 
                                     className="p-3 border rounded-xl text-xs font-bold bg-gray-50"

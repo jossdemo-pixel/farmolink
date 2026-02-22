@@ -115,26 +115,56 @@ const createGoogleAccessToken = async (
   }
 };
 
-const extractBearerToken = (headerValue: string) => {
-  const parts = String(headerValue || "")
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  for (let i = parts.length - 1; i >= 0; i--) {
+const extractBearerTokens = (headerValue: string): string[] => {
+  const raw = String(headerValue || "").trim();
+  if (!raw) return [];
+  // Some runtimes/proxies may concatenate auth headers with commas.
+  // Collect every Bearer candidate and let auth.getUser decide which one is valid.
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  const tokens: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
     const match = parts[i].match(/^Bearer\s+(.+)$/i);
-    if (match?.[1]) return match[1].trim();
+    if (match?.[1]) tokens.push(match[1].trim());
   }
+  const direct = raw.match(/^Bearer\s+(.+)$/i);
+  if (direct?.[1]) tokens.push(direct[1].trim());
+  return [...new Set(tokens.filter(Boolean))];
+};
 
-  return "";
+const decodeJwtPayload = (token: string): Record<string, unknown> | null => {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const json = atob(padded);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 };
 
 const getUserFromBearer = async (admin: any, authHeader: string) => {
-  const token = extractBearerToken(authHeader);
-  if (!token) return null;
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user?.id) return null;
-  return data.user;
+  const tokens = extractBearerTokens(authHeader);
+  if (!tokens.length) return { user: null, reason: "missing_bearer_token", tokenPayload: null };
+
+  let lastReason = "invalid_token";
+  let lastPayload: Record<string, unknown> | null = null;
+  for (const token of tokens) {
+    const tokenPayload = decodeJwtPayload(token);
+    const { data, error } = await admin.auth.getUser(token);
+    if (!error && data?.user?.id) {
+      return { user: data.user, reason: null, tokenPayload };
+    }
+    lastReason = error?.message || "invalid_token";
+    lastPayload = tokenPayload;
+  }
+
+  return {
+    user: null,
+    reason: lastReason,
+    tokenPayload: lastPayload,
+  };
 };
 
 const normalizeUniqueIds = (ids: string[]): string[] =>
@@ -269,12 +299,37 @@ const resolveRecipientsForCustomerAudience = async (
   return { recipients: [], error: "Forbidden." };
 };
 
+const resolveAndroidChannelId = (rawType: string): string => {
+  const type = String(rawType || "").trim().toUpperCase();
+  if (!type || type === "SYSTEM") return "farmolink-general";
+
+  if (
+    type.startsWith("ORDER") ||
+    type.startsWith("RX") ||
+    type.startsWith("SUPPORT")
+  ) {
+    return "farmolink-important";
+  }
+
+  if (
+    type.includes("MARKETING") ||
+    type.includes("PROMO") ||
+    type.includes("CAMPAIGN") ||
+    type.includes("BANNER")
+  ) {
+    return "farmolink-marketing";
+  }
+
+  return "farmolink-general";
+};
+
 const sendToFcmToken = async (
   accessToken: string,
   projectId: string,
   token: string,
   title: string,
   body: string,
+  channelId: string,
   data: Record<string, string> = {},
 ) => {
   const res = await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
@@ -292,7 +347,7 @@ const sendToFcmToken = async (
           priority: "HIGH",
           notification: {
             sound: "default",
-            channel_id: "farmolink-important",
+            channel_id: channelId,
           },
         },
       },
@@ -333,9 +388,20 @@ serve(async (req) => {
     const hasFcmCredentials = !!(projectId && clientEmail && privateKey);
 
     const authHeader = req.headers.get("authorization") || "";
-    const currentUser = await getUserFromBearer(admin, authHeader);
+    const authResult = await getUserFromBearer(admin, authHeader);
+    const currentUser = authResult?.user;
     if (!currentUser?.id) {
-      return new Response(JSON.stringify({ error: "Unauthorized." }), {
+      const projectRef = (Deno.env.get("SUPABASE_URL") || "")
+        .replace(/^https?:\/\//, "")
+        .split(".")[0] || null;
+      return new Response(JSON.stringify({
+        error: "Unauthorized.",
+        reason: authResult?.reason || "invalid_token",
+        token_ref: String((authResult?.tokenPayload as any)?.ref || ""),
+        token_role: String((authResult?.tokenPayload as any)?.role || ""),
+        token_iss: String((authResult?.tokenPayload as any)?.iss || ""),
+        project_ref: projectRef,
+      }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -474,11 +540,13 @@ serve(async (req) => {
     let sent = 0;
     let failed = 0;
     const deactivateList: string[] = [];
+    const channelId = resolveAndroidChannelId(type);
 
     for (const t of tokens) {
-      const result = await sendToFcmToken(accessToken, projectId, t.token, title, message, {
+      const result = await sendToFcmToken(accessToken, projectId, t.token, title, message, channelId, {
         type,
         page,
+        channel_id: channelId,
       });
 
       const fcmError =

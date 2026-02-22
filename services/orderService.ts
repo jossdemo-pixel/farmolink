@@ -1,6 +1,7 @@
 ﻿
 import { supabase, safeQuery } from './supabaseClient';
 import { Order, OrderStatus, PrescriptionRequest, PrescriptionQuote, QuotedItem, UserRole, PrescriptionStatus, User } from '../types';
+import { invokePushDispatchWithAuth } from './pushDispatchService';
 
 const safeJsonParse = (data: any): any[] => {
     try {
@@ -59,76 +60,6 @@ const getCommissionRateForPharmacy = async (pharmacyId: string): Promise<number>
     }
 };
 
-const extractEdgeInvokeError = async (error: any): Promise<string> => {
-    const fallback = error?.message || 'Falha ao enviar push.';
-    try {
-        const response: Response | undefined = error?.context;
-        if (!response) return fallback;
-
-        const body = await response.clone().json().catch(async () => {
-            const text = await response.clone().text().catch(() => '');
-            return text ? { error: text } : null;
-        });
-
-        const detailed =
-            body?.error ||
-            body?.details ||
-            body?.reason ||
-            body?.message ||
-            body?.msg;
-
-        return detailed ? String(detailed) : fallback;
-    } catch {
-        return fallback;
-    }
-};
-
-const isJwtEdgeError = (message: string): boolean => {
-    const msg = String(message || '').toLowerCase();
-    return (
-        msg.includes('invalid jwt') ||
-        msg.includes('jwt') ||
-        msg.includes('unauthorized') ||
-        (msg.includes('token') && msg.includes('invalid'))
-    );
-};
-
-const invokePushDispatchWithAutoRefresh = async (
-    body: Record<string, unknown>
-): Promise<{ data: any; error: string | null }> => {
-    const { data: firstSessionData } = await supabase.auth.getSession();
-    const firstToken = firstSessionData?.session?.access_token;
-    if (!firstToken) {
-        return { data: null, error: 'Sessao expirada para notificacoes push.' };
-    }
-
-    const first = await supabase.functions.invoke('push-dispatch', {
-        body,
-        headers: { Authorization: `Bearer ${firstToken}` }
-    });
-
-    if (!first.error) return { data: first.data, error: null };
-
-    const firstErrText = await extractEdgeInvokeError(first.error);
-    if (!isJwtEdgeError(firstErrText)) {
-        return { data: null, error: firstErrText };
-    }
-
-    const { data: refreshed } = await supabase.auth.refreshSession();
-    const refreshedToken = refreshed?.session?.access_token;
-    if (!refreshedToken) {
-        return { data: null, error: 'Sessao expirada para notificacoes push.' };
-    }
-
-    const second = await supabase.functions.invoke('push-dispatch', {
-        body,
-        headers: { Authorization: `Bearer ${refreshedToken}` }
-    });
-
-    if (!second.error) return { data: second.data, error: null };
-
-    return { data: null, error: await extractEdgeInvokeError(second.error) };
-};
 
 const pushOrderStatusUpdateToCustomer = async (
     customerId: string,
@@ -171,7 +102,7 @@ const pushOrderStatusUpdateToCustomer = async (
     const payload = copy[nextStatus];
     if (!payload) return;
 
-    const result = await invokePushDispatchWithAutoRefresh({
+    const result = await invokePushDispatchWithAuth({
         singleUserId: customerId,
         title: payload.title,
         message: payload.message,
@@ -227,7 +158,7 @@ export const createPrescriptionRequest = async (
 
     if (createdRx?.id && cleanTargets.length > 0) {
         try {
-            const result = await invokePushDispatchWithAutoRefresh({
+            const result = await invokePushDispatchWithAuth({
                 audience: 'RX_TARGET_PHARMACY',
                 prescriptionId: createdRx.id,
                 title: 'NOVA RECEITA PARA COTACAO',
@@ -383,7 +314,7 @@ export const sendPrescriptionQuote = async (
     await supabase.from('prescriptions').update({ status: 'WAITING_FOR_QUOTES' }).eq('id', prescriptionId).neq('status', 'COMPLETED');
 
     if (rxBefore?.customer_id) {
-        const result = await invokePushDispatchWithAutoRefresh({
+        const result = await invokePushDispatchWithAuth({
             singleUserId: rxBefore.customer_id,
             title: 'ORCAMENTO RECEBIDO',
             message: `${pharmacyName} respondeu a tua receita com um orÃ§amento.`,
@@ -438,7 +369,7 @@ export const acceptQuoteAndCreateOrder = async (
 
         if (createdOrder?.id) {
             try {
-                const result = await invokePushDispatchWithAutoRefresh({
+                const result = await invokePushDispatchWithAuth({
                     audience: 'ORDER_PHARMACY',
                     orderId: createdOrder.id,
                     title: 'PEDIDO CONFIRMADO',
@@ -476,7 +407,7 @@ export const createOrder = async (order: Omit<Order, 'id' | 'date'>): Promise<{ 
     if (error) return { success: false, error: error.message || "Falha ao fechar pedido." };
 
     if (createdOrder?.id) {
-      const result = await invokePushDispatchWithAutoRefresh({
+      const result = await invokePushDispatchWithAuth({
         audience: 'ORDER_PHARMACY',
         orderId: createdOrder.id,
         title: 'NOVO PEDIDO DE UTENTE',

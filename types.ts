@@ -216,6 +216,33 @@ export interface PharmacyInput {
   instagram?: string;
 }
 
+export interface GeneratedReport {
+  resumo: string;
+  abstract: string;
+  introducao: string;
+  objetivos: string;
+  caracterizacao: string;
+  atividades: string;
+  competencias: string;
+  dificuldades: string;
+  conclusao: string;
+  referencias: string;
+}
+
+export interface QuizData {
+  logoBase64?: string;
+  anexosBase64?: string[];
+  instituicao: string;
+  departamento: string;
+  curso: string;
+  localEstagio: string;
+  nomeCompleto: string;
+  provincia: string;
+  anoLectivo: string;
+  nivel: string;
+  supervisor: string;
+}
+
 export const PRODUCT_CATEGORIES = [
     "Alergias e Reações Alérgicas",
     "Antibióticos e Antimicrobianos",

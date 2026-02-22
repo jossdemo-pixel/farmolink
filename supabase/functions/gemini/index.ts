@@ -90,18 +90,24 @@ const safeJsonParse = (value: string, fallback: any) => {
   }
 };
 
-const extractBearerToken = (headerValue: string) => {
-  const parts = String(headerValue || "")
+const extractBearerTokens = (headerValue: string): string[] => {
+  const raw = String(headerValue || "").trim();
+  if (!raw) return [];
+  const parts = raw
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean);
 
-  for (let i = parts.length - 1; i >= 0; i--) {
+  const tokens: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
     const match = parts[i].match(/^Bearer\s+(.+)$/i);
-    if (match?.[1]) return match[1].trim();
+    if (match?.[1]) tokens.push(match[1].trim());
   }
 
-  return "";
+  const direct = raw.match(/^Bearer\s+(.+)$/i);
+  if (direct?.[1]) tokens.push(direct[1].trim());
+
+  return [...new Set(tokens.filter(Boolean))];
 };
 
 const createAdminClient = () => {
@@ -124,6 +130,15 @@ const resolveUserFromToken = async (admin: any, token: string) => {
   } catch {
     return null;
   }
+};
+
+const resolveUserFromAuthHeader = async (admin: any, authHeader: string) => {
+  const tokens = extractBearerTokens(authHeader);
+  for (const token of tokens) {
+    const user = await resolveUserFromToken(admin, token);
+    if (user) return user;
+  }
+  return null;
 };
 
 const extractKeywords = (text: string, max = 6): string[] => {
@@ -374,8 +389,7 @@ serve(async (req) => {
     if (action === "chat" || action === "farmobot_message") {
       const admin = createAdminClient();
       const authHeader = req.headers.get("authorization") || "";
-      const token = extractBearerToken(authHeader);
-      const user = await resolveUserFromToken(admin, token);
+      const user = await resolveUserFromAuthHeader(admin, authHeader);
 
       const userMessage = String(message || "").trim();
       if (!userMessage) {

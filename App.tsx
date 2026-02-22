@@ -17,6 +17,7 @@ import { WifiOff, Wifi, AlertCircle, LayoutDashboard, ShoppingBag, Store, FileTe
 import { isOfflineNow, processOfflineQueue } from './services/offlineService';
 import { initializePushNotifications, teardownPushNotifications } from './services/pushService';
 import { supabase } from './services/supabaseClient';
+import { dispatchMarketingNudge } from './services/engagementService';
 
 // --- Static View Imports ---
 import { HomeView, AllPharmaciesView, CartView, PharmacyProfileView } from './views/CustomerShop'; // NOVA VIEW
@@ -79,6 +80,11 @@ export const App: React.FC = () => {
     const pageRef = useRef<string>('home');
     const [pharmacyUrgentAlert, setPharmacyUrgentAlert] = useState<{ type: 'ORDER' | 'RX', count: number } | null>(null);
     const pharmacyAlarmIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const cartNudgeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pharmacyPendingNudgeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const cartRef = useRef<CartItem[]>([]);
+    const explicitLogoutRef = useRef(false);
+    const sessionBootstrapDoneRef = useRef(false);
 
     const isPasswordRecoveryFlow = useCallback(() => {
         try {
@@ -406,35 +412,102 @@ export const App: React.FC = () => {
         }
     }, [updateDistances]);
 
-    const checkSession = useCallback(async () => {
-        setLoading(true);
+    const routeByRole = useCallback((currUser: User) => {
+        if (currUser.role === UserRole.PHARMACY) setPage('dashboard');
+        else if (currUser.role === UserRole.ADMIN) setPage('admin-dashboard');
+        else setPage('home');
+    }, []);
+
+    const clearAuthenticatedState = useCallback((nextPage: string = 'home') => {
+        setUser(null);
+        setCart([]);
+        setActivePharmacyId(null);
+        setOrders([]);
+        setPrescriptions([]);
+        setLastSyncAt(null);
+        setPage(nextPage);
+    }, []);
+
+    const hydrateFromSession = useCallback(async (opts?: {
+        withLoading?: boolean;
+        preservePage?: boolean;
+        refreshData?: boolean;
+    }) => {
+        const withLoading = !!opts?.withLoading;
+        const preservePage = !!opts?.preservePage;
+        const refreshData = opts?.refreshData !== false;
+        if (withLoading) setLoading(true);
         try {
             const currUser = await getCurrentUser();
-            if (currUser) {
-                setUser(currUser);
-                setLastSyncAt(getLastSyncForUser(currUser.id));
-
-                // Em recuperação de senha, mantém a tela de redefinição.
-                if (isPasswordRecoveryFlow()) {
-                    setPage('reset-password');
-                    return;
+            if (!currUser) {
+                if (!isPasswordRecoveryFlow() && withLoading) {
+                    clearAuthenticatedState('home');
+                } else if (!isPasswordRecoveryFlow()) {
+                    setNetworkError('Sessao expirada. Entre novamente para continuar.');
                 }
-
-                await loadData(currUser);
-                if (currUser.role === UserRole.PHARMACY) setPage('dashboard');
-                else if (currUser.role === UserRole.ADMIN) setPage('admin-dashboard');
-                else setPage('home');
+                return null;
             }
+
+            setUser(currUser);
+            setLastSyncAt(getLastSyncForUser(currUser.id));
+
+            if (isPasswordRecoveryFlow()) {
+                setPage('reset-password');
+                return currUser;
+            }
+
+            if (refreshData) {
+                await loadData(currUser);
+            }
+            if (!preservePage) {
+                routeByRole(currUser);
+            }
+            return currUser;
         } catch (e) {
-            console.warn("Sessão não pôde ser verificada:", e);
+            console.warn("Sessão não pôde ser hidratada:", e);
+            return null;
         } finally {
-            setLoading(false);
+            if (withLoading) setLoading(false);
         }
-    }, [isPasswordRecoveryFlow, loadData]);
+    }, [clearAuthenticatedState, isPasswordRecoveryFlow, loadData, routeByRole]);
+
+    const checkSession = useCallback(async () => {
+        await hydrateFromSession({ withLoading: true, preservePage: false, refreshData: true });
+    }, [hydrateFromSession]);
 
     useEffect(() => {
+        if (sessionBootstrapDoneRef.current) return;
+        sessionBootstrapDoneRef.current = true;
         checkSession();
     }, [checkSession]);
+
+    useEffect(() => {
+        const authEventWatchEnabled = false;
+        if (!authEventWatchEnabled) {
+            return;
+        }
+
+        const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+            if (event === 'PASSWORD_RECOVERY') {
+                setPage('reset-password');
+                return;
+            }
+
+            if (event === 'SIGNED_OUT') {
+                if (explicitLogoutRef.current) {
+                    clearAuthenticatedState(isPasswordRecoveryFlow() ? 'reset-password' : 'home');
+                    explicitLogoutRef.current = false;
+                } else {
+                    setNetworkError('Sessao foi encerrada. Entre novamente para continuar.');
+                }
+                return;
+            }
+        });
+
+        return () => {
+            authListener?.subscription.unsubscribe();
+        };
+    }, [clearAuthenticatedState, isPasswordRecoveryFlow]);
 
     useEffect(() => {
         pageRef.current = page;
@@ -442,6 +515,10 @@ export const App: React.FC = () => {
             lastCustomerPageRef.current = page;
         }
     }, [page, user?.role]);
+
+    useEffect(() => {
+        cartRef.current = cart;
+    }, [cart]);
 
     useEffect(() => {
         if (navigator.onLine) {
@@ -552,12 +629,90 @@ export const App: React.FC = () => {
         };
     }, [user, pharmacyUrgentAlert]);
 
+    useEffect(() => {
+        if (cartNudgeTimeoutRef.current) {
+            clearTimeout(cartNudgeTimeoutRef.current);
+            cartNudgeTimeoutRef.current = null;
+        }
+
+        if (!user || user.role !== UserRole.CUSTOMER || cart.length === 0) return;
+
+        cartNudgeTimeoutRef.current = setTimeout(async () => {
+            const hasItems = cartRef.current.length > 0;
+            const isAlreadyInCart = pageRef.current === 'cart';
+            if (!hasItems || isAlreadyInCart) return;
+
+            await dispatchMarketingNudge({
+                userId: user.id,
+                nudgeKey: 'customer_cart_idle_30m',
+                cooldownMs: 6 * 60 * 60 * 1000,
+                title: 'CARRINHO A ESPERA',
+                message: 'Seus produtos continuam no carrinho. Finalize agora para garantir disponibilidade.',
+                page: 'cart',
+                type: 'MARKETING_CART_IDLE'
+            });
+        }, 30 * 60 * 1000);
+
+        return () => {
+            if (cartNudgeTimeoutRef.current) {
+                clearTimeout(cartNudgeTimeoutRef.current);
+                cartNudgeTimeoutRef.current = null;
+            }
+        };
+    }, [user?.id, user?.role, cart]);
+
+    useEffect(() => {
+        if (pharmacyPendingNudgeIntervalRef.current) {
+            clearInterval(pharmacyPendingNudgeIntervalRef.current);
+            pharmacyPendingNudgeIntervalRef.current = null;
+        }
+
+        if (!user || user.role !== UserRole.PHARMACY) return;
+
+        const evaluatePendingNudge = async () => {
+            if (pageRef.current === 'pharmacy-orders') return;
+
+            const pendingOrders = orders.filter(o => o.status === OrderStatus.PENDING);
+            if (!pendingOrders.length) return;
+
+            let oldestPendingAt = Number.POSITIVE_INFINITY;
+            for (const order of pendingOrders) {
+                const parsed = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+                if (Number.isFinite(parsed)) {
+                    oldestPendingAt = Math.min(oldestPendingAt, parsed);
+                }
+            }
+            if (!Number.isFinite(oldestPendingAt)) return;
+
+            const elapsedMs = Date.now() - oldestPendingAt;
+            if (elapsedMs < 10 * 60 * 1000) return;
+
+            await dispatchMarketingNudge({
+                userId: user.id,
+                nudgeKey: 'pharmacy_pending_orders_10m',
+                cooldownMs: 20 * 60 * 1000,
+                title: 'PEDIDO A AGUARDAR',
+                message: 'Ha pedidos pendentes ha mais de 10 minutos. Responda agora para evitar perda de venda.',
+                page: 'pharmacy-orders',
+                type: 'MARKETING_PHARMACY_PENDING'
+            });
+        };
+
+        evaluatePendingNudge();
+        pharmacyPendingNudgeIntervalRef.current = setInterval(evaluatePendingNudge, 60 * 1000);
+
+        return () => {
+            if (pharmacyPendingNudgeIntervalRef.current) {
+                clearInterval(pharmacyPendingNudgeIntervalRef.current);
+                pharmacyPendingNudgeIntervalRef.current = null;
+            }
+        };
+    }, [user?.id, user?.role, orders, page]);
+
     const handleLoginSuccess = (userData: User) => {
         setUser(userData);
         loadData(userData);
-        if (userData.role === UserRole.PHARMACY) setPage('dashboard');
-        else if (userData.role === UserRole.ADMIN) setPage('admin-dashboard');
-        else setPage('home');
+        routeByRole(userData);
         playSound('login');
         
         // Toca mensagem de boas-vindas para clientes (com delay para garantir carregamento de áudio)
@@ -571,14 +726,13 @@ export const App: React.FC = () => {
 
     const handleLogout = async () => {
         setIsAppLoading(true);
+        explicitLogoutRef.current = true;
         try {
             await signOutUser();
-            setUser(null);
-            setCart([]);
-            setActivePharmacyId(null);
-            setPage('home');
+            clearAuthenticatedState('home');
             playSound('logout');
         } finally {
+            explicitLogoutRef.current = false;
             setIsAppLoading(false);
         }
     };

@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient';
 import { PrescriptionRequest } from '../types';
+import { invokeEdgeWithAutoRefresh } from './edgeAuthService';
 
 const TIMEOUT = 30000;
 const VISION_TIMEOUT = 45000;
@@ -7,6 +8,13 @@ const VISION_TIMEOUT = 45000;
 export interface BotActionEvent {
   type: string;
   payload?: Record<string, unknown>;
+}
+
+export interface BotChatSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
 }
 
 const normalizeText = (value: string) =>
@@ -73,91 +81,26 @@ const withTimeout = <T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> =>
       });
   });
 
-const isAuthError = (error: any, data?: any): boolean => {
-  const text = `${error?.message || ''} ${data?.error || ''} ${data?.details || ''}`.toLowerCase();
-  return (
-    text.includes('401') ||
-    text.includes('unauthorized') ||
-    text.includes('nao autenticado') ||
-    text.includes('sessao invalida') ||
-    text.includes('jwt')
-  );
-};
-
-const extractEdgeInvokeError = async (error: any, data?: any): Promise<Error> => {
-  if (data?.details || data?.error) {
-    return new Error(data?.details || data?.error);
-  }
-
-  const fallback = error?.message || 'Falha na Edge Function';
-  try {
-    const response = error?.context;
-    if (!response) return new Error(fallback);
-
-    const body = await response.clone().json().catch(async () => {
-      const text = await response.clone().text().catch(() => '');
-      return text ? { error: text } : null;
-    });
-
-    const detailed =
-      body?.details ||
-      body?.error ||
-      body?.reason ||
-      body?.message ||
-      body?.msg;
-
-    return new Error(detailed ? String(detailed) : fallback);
-  } catch {
-    return new Error(fallback);
-  }
-};
-
 const invokeGemini = async (
   body: Record<string, unknown>,
   retryOnAuthError = false
-): Promise<{ data: any; error: any; authFailed: boolean }> => {
-  const { data: firstSessionData } = await supabase.auth.getSession();
-  const firstToken = firstSessionData?.session?.access_token;
-  const firstInvokePayload: any = { body };
-  if (firstToken) {
-    firstInvokePayload.headers = { Authorization: `Bearer ${firstToken}` };
-  }
-
-  const first = await supabase.functions.invoke('gemini', firstInvokePayload);
-
-  if (!first.error && !first.data?.error) {
-    return { data: first.data, error: null, authFailed: false };
-  }
-
-  const firstError =
-    first.error ? await extractEdgeInvokeError(first.error, first.data) : await extractEdgeInvokeError(null, first.data);
-  const firstAuthFailed = isAuthError(firstError, first.data);
-
-  if (retryOnAuthError && firstAuthFailed) {
-    const { data: refreshed } = await supabase.auth.refreshSession();
-    const refreshedToken = refreshed?.session?.access_token;
-    const secondInvokePayload: any = { body };
-    if (refreshedToken) {
-      secondInvokePayload.headers = { Authorization: `Bearer ${refreshedToken}` };
+): Promise<{ data: any; error: Error | null; authFailed: boolean }> => {
+  const result = await invokeEdgeWithAutoRefresh({
+    functionName: 'gemini',
+    body,
+    allowAnonymous: true,
+    retryOnAuthError,
+    dataErrorExtractor: (data) => {
+      const detailed = data?.details || data?.error;
+      return detailed ? String(detailed) : null;
     }
+  });
 
-    const second = await supabase.functions.invoke('gemini', secondInvokePayload);
-
-    if (!second.error && !second.data?.error) {
-      return { data: second.data, error: null, authFailed: false };
-    }
-
-    const secondError =
-      second.error ? await extractEdgeInvokeError(second.error, second.data) : await extractEdgeInvokeError(null, second.data);
-
-    return {
-      data: second.data,
-      error: secondError,
-      authFailed: isAuthError(secondError, second.data)
-    };
-  }
-
-  return { data: first.data, error: firstError, authFailed: firstAuthFailed };
+  return {
+    data: result.data,
+    error: result.error ? new Error(result.error) : null,
+    authFailed: result.authFailed
+  };
 };
 
 export const checkAiHealth = async (): Promise<boolean> => {
@@ -181,13 +124,66 @@ export const checkAiHealth = async (): Promise<boolean> => {
   }
 };
 
-export const fetchChatHistory = async (userId: string) => {
+export const fetchChatSessions = async (userId: string): Promise<BotChatSession[]> => {
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
+      .from('bot_chat_sessions')
+      .select('id,title,created_at,updated_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(50);
+
+    if (error) return [];
+    return (data || []) as BotChatSession[];
+  } catch {
+    return [];
+  }
+};
+
+export const createChatSession = async (userId: string, title = 'Nova conversa'): Promise<BotChatSession | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('bot_chat_sessions')
+      .insert([{ user_id: userId, title }])
+      .select('id,title,created_at,updated_at')
+      .single();
+
+    if (error) return null;
+    return data as BotChatSession;
+  } catch {
+    return null;
+  }
+};
+
+export const deleteChatSession = async (userId: string, sessionId: string): Promise<boolean> => {
+  try {
+    const { error } = await supabase
+      .from('bot_chat_sessions')
+      .delete()
+      .eq('id', sessionId)
+      .eq('user_id', userId);
+    return !error;
+  } catch {
+    return false;
+  }
+};
+
+export const fetchChatHistory = async (userId: string, sessionId?: string) => {
+  try {
+    let query = supabase
       .from('bot_conversations')
       .select('role, content')
       .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .limit(300);
+
+    if (sessionId) {
+      query = query.eq('session_id', sessionId);
+    } else {
+      query = query.is('session_id', null);
+    }
+
+    const { data } = await query;
 
     return data || [];
   } catch (e) {
@@ -196,9 +192,30 @@ export const fetchChatHistory = async (userId: string) => {
   }
 };
 
-export const saveChatMessage = async (userId: string, role: 'user' | 'model', content: string) => {
+export const saveChatMessage = async (
+  userId: string,
+  role: 'user' | 'model',
+  content: string,
+  sessionId?: string
+) => {
   try {
-    await supabase.from('bot_conversations').insert([{ user_id: userId, role, content }]);
+    await supabase.from('bot_conversations').insert([{
+      user_id: userId,
+      role,
+      content,
+      session_id: sessionId || null
+    }]);
+
+    if (sessionId) {
+      await supabase
+        .from('bot_chat_sessions')
+        .update({
+          updated_at: new Date().toISOString(),
+          title: role === 'user' ? String(content || '').trim().slice(0, 60) || 'Conversa' : undefined
+        })
+        .eq('id', sessionId)
+        .eq('user_id', userId);
+    }
   } catch (e) {
     console.error('Erro ao salvar mensagem:', e);
   }
@@ -210,12 +227,14 @@ export const getChatSession = () => {
       message,
       userName,
       history,
-      userId
+      userId,
+      sessionId
     }: {
       message: string;
       userName?: string;
       history?: any[];
       userId: string;
+      sessionId?: string;
     }) => {
       try {
         if (!message?.trim()) {
@@ -258,30 +277,42 @@ export const getChatSession = () => {
           pharmacyMap = new Map((pharmacies || []).map((ph: any) => [String(ph.id), ph]));
         }
 
-        const { data, error, authFailed } = await withTimeout(
-          () =>
-            invokeGemini(
-              {
-                action: 'farmobot_message',
-                message,
-                userName,
-                history: history?.map((h: any) => ({ role: h.role, content: h.text || h.content })),
-                productsContext: (products || []).map((p: any) => ({
-                  id: p.id,
-                  name: p.name,
-                  price: p.price,
-                  stock: p.stock,
-                  requiresPrescription: p.requires_prescription,
-                  pharmacyId: p.pharmacy_id,
-                  pharmacyName: pharmacyMap.get(String(p.pharmacy_id || ''))?.name || 'Farmacia',
-                  pharmacyStatus: pharmacyMap.get(String(p.pharmacy_id || ''))?.status || '',
-                  pharmacyAvailable: !!pharmacyMap.get(String(p.pharmacy_id || ''))?.is_available
-                }))
-              },
-              true
-            ),
-          TIMEOUT
-        );
+        const callGemini = (compact = false) =>
+          withTimeout(
+            () =>
+              invokeGemini(
+                {
+                  action: 'farmobot_message',
+                  message,
+                  userName,
+                  history: compact
+                    ? history?.slice(-2).map((h: any) => ({ role: h.role, content: h.text || h.content }))
+                    : history?.map((h: any) => ({ role: h.role, content: h.text || h.content })),
+                  productsContext: compact
+                    ? []
+                    : (products || []).map((p: any) => ({
+                        id: p.id,
+                        name: p.name,
+                        price: p.price,
+                        stock: p.stock,
+                        requiresPrescription: p.requires_prescription,
+                        pharmacyId: p.pharmacy_id,
+                        pharmacyName: pharmacyMap.get(String(p.pharmacy_id || ''))?.name || 'Farmacia',
+                        pharmacyStatus: pharmacyMap.get(String(p.pharmacy_id || ''))?.status || '',
+                        pharmacyAvailable: !!pharmacyMap.get(String(p.pharmacy_id || ''))?.is_available
+                      }))
+                },
+                true
+              ),
+            TIMEOUT
+          );
+
+        let invokeResult = await callGemini(false);
+        if (invokeResult.error && String(invokeResult.error?.message || '').toLowerCase().includes('timeout')) {
+          invokeResult = await callGemini(true);
+        }
+
+        const { data, error, authFailed } = invokeResult;
 
         if (error) {
           console.error('Erro na Edge Function:', error);
@@ -297,9 +328,9 @@ export const getChatSession = () => {
           throw new Error(error?.message || 'Erro ao processar sua mensagem');
         }
 
-        saveChatMessage(userId, 'user', message);
+        saveChatMessage(userId, 'user', message, sessionId);
         if (data?.text) {
-          saveChatMessage(userId, 'model', data.text);
+          saveChatMessage(userId, 'model', data.text, sessionId);
         }
 
         return { text: data?.text || 'Desculpe, recebi uma resposta vazia.' };

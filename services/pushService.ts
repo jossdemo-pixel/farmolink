@@ -10,6 +10,59 @@ let initializedForUserId: string | null = null;
 let currentToken: string | null = null;
 let removeListeners: (() => Promise<void>) | null = null;
 
+type NotificationChannelId = 'farmolink-important' | 'farmolink-general' | 'farmolink-marketing';
+
+const PUSH_CHANNELS: Array<{
+    id: NotificationChannelId;
+    name: string;
+    description: string;
+    importance: 2 | 3 | 4 | 5;
+}> = [
+    {
+        id: 'farmolink-important',
+        name: 'FarmoLink Importantes',
+        description: 'Alertas importantes de pedidos, receitas e suporte',
+        importance: 5
+    },
+    {
+        id: 'farmolink-general',
+        name: 'FarmoLink Gerais',
+        description: 'Atualizacoes gerais do sistema e da conta',
+        importance: 4
+    },
+    {
+        id: 'farmolink-marketing',
+        name: 'FarmoLink Marketing',
+        description: 'Campanhas, promocoes e novidades comerciais',
+        importance: 3
+    }
+];
+
+const resolveChannelIdFromType = (rawType: unknown): NotificationChannelId => {
+    const type = String(rawType || '').trim().toUpperCase();
+    if (!type) return 'farmolink-general';
+
+    if (
+        type.startsWith('ORDER') ||
+        type.startsWith('RX') ||
+        type.startsWith('SUPPORT')
+    ) {
+        return 'farmolink-important';
+    }
+
+    if (
+        type.includes('MARKETING') ||
+        type.includes('PROMO') ||
+        type.includes('CAMPAIGN') ||
+        type.includes('BANNER')
+    ) {
+        return 'farmolink-marketing';
+    }
+
+    if (type === 'SYSTEM') return 'farmolink-general';
+    return 'farmolink-general';
+};
+
 const isNativePlatform = (): boolean => {
     try {
         return Capacitor.isNativePlatform();
@@ -36,25 +89,29 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
     const permission = await PushNotifications.requestPermissions();
     if (permission.receive !== 'granted') return;
 
-    await PushNotifications.createChannel({
-        id: 'farmolink-important',
-        name: 'FarmoLink Importantes',
-        description: 'Alertas importantes de pedidos, suporte e sistema',
-        importance: 5,
-        sound: 'default',
-        visibility: 1
-    }).catch(() => undefined);
+    for (const channel of PUSH_CHANNELS) {
+        await PushNotifications.createChannel({
+            id: channel.id,
+            name: channel.name,
+            description: channel.description,
+            importance: channel.importance,
+            sound: 'default',
+            visibility: 1
+        }).catch(() => undefined);
+    }
 
     try {
         await LocalNotifications.requestPermissions();
-        await LocalNotifications.createChannel({
-            id: 'farmolink-important',
-            name: 'FarmoLink Importantes',
-            description: 'Alertas importantes de pedidos, suporte e sistema',
-            importance: 5,
-            sound: 'default',
-            visibility: 1
-        });
+        for (const channel of PUSH_CHANNELS) {
+            await LocalNotifications.createChannel({
+                id: channel.id,
+                name: channel.name,
+                description: channel.description,
+                importance: channel.importance,
+                sound: 'default',
+                visibility: 1
+            });
+        }
 
         await LocalNotifications.addListener('localNotificationActionPerformed', (event: any) => {
             const targetPage = resolveTargetPageFromPush(event?.notification?.extra || event?.notification?.data);
@@ -85,6 +142,7 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
             const when = Date.now() + 350;
             const title = notification?.title || 'FarmoLink';
             const body = notification?.body || notification?.data?.message || 'Nova atualizacao';
+            const channelId = resolveChannelIdFromType(notification?.data?.type);
 
             await LocalNotifications.schedule({
                 notifications: [
@@ -93,7 +151,7 @@ export const initializePushNotifications = async (userId: string, onNavigate?: N
                         title,
                         body,
                         schedule: { at: new Date(when) },
-                        channelId: 'farmolink-important',
+                        channelId,
                         extra: notification?.data || {}
                     }
                 ]

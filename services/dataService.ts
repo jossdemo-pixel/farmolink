@@ -1,6 +1,7 @@
 ﻿import { supabase, safeQuery } from './supabaseClient';
 import { CarouselSlide, Partner, Notification, UserRole, Product, Pharmacy, Order, PrescriptionRequest, SettlementCycle } from '../types';
 import { enqueueOfflineAction, isOfflineNow } from './offlineService';
+import { invokePushDispatchWithAuth } from './pushDispatchService';
 
 export * from './authService';
 export * from './pharmacyService';
@@ -363,16 +364,20 @@ export const sendTicketMessage = async (
                 .maybeSingle();
 
             if (ticket?.user_id) {
-                await supabase.functions.invoke('push-dispatch', {
-                    body: {
+                const pushResult = await invokePushDispatchWithAuth(
+                    {
                         singleUserId: ticket.user_id,
                         title: 'SUPORTE RESPONDEU',
                         message: 'Recebeste uma nova resposta no teu atendimento.',
                         type: 'SUPPORT_REPLY',
                         page: 'support',
                         persistNotification: true
-                    }
-                });
+                    },
+                    'Sessao expirada. Entre novamente para notificar o utente.'
+                );
+                if (pushResult.error) {
+                    console.warn('Push de suporte indisponivel:', pushResult.error);
+                }
             }
         } catch (e) {
             console.warn('Falha ao acionar push de suporte:', e);
@@ -422,98 +427,87 @@ export interface NotificationDispatchResult {
     details?: any;
 }
 
-const extractEdgeInvokeError = async (error: any): Promise<string> => {
-    const fallback = error?.message || 'Erro ao chamar edge function.';
-    try {
-        const response = error?.context;
-        if (!response) return fallback;
-
-        const body = await response.clone().json().catch(async () => {
-            const text = await response.clone().text().catch(() => '');
-            return text ? { error: text } : null;
-        });
-
-        const detailed =
-            body?.error ||
-            body?.details ||
-            body?.reason ||
-            body?.message ||
-            body?.msg;
-
-        if (!detailed) return fallback;
-        return String(detailed);
-    } catch {
-        return fallback;
-    }
-};
-
-const isJwtEdgeError = (message: string): boolean => {
+const isJwtLikeDispatchError = (message: string): boolean => {
     const msg = String(message || '').toLowerCase();
     return (
         msg.includes('invalid jwt') ||
         msg.includes('jwt') ||
         msg.includes('unauthorized') ||
-        msg.includes('token') && msg.includes('invalid')
+        msg.includes('not authorized') ||
+        msg.includes('sessao') ||
+        msg.includes('session')
     );
 };
 
-const invokePushDispatchWithAutoRefresh = async (
-    body: Record<string, unknown>
-): Promise<{ data: any; error: string | null }> => {
-    const { data: firstSessionData } = await supabase.auth.getSession();
-    const firstToken = firstSessionData?.session?.access_token;
-    if (!firstToken) {
-        return { data: null, error: 'Sessao expirada. Entre novamente para enviar comunicados.' };
-    }
-
-    const first = await supabase.functions.invoke('push-dispatch', {
-        body,
-        headers: { Authorization: `Bearer ${firstToken}` }
-    });
-
-    if (!first.error) {
-        return { data: first.data, error: null };
-    }
-
-    const firstErrText = await extractEdgeInvokeError(first.error);
-    if (!isJwtEdgeError(firstErrText)) {
-        return { data: null, error: firstErrText };
-    }
-
-    const { data: refreshed } = await supabase.auth.refreshSession();
-    const refreshedToken = refreshed?.session?.access_token;
-    if (!refreshedToken) {
-        return { data: null, error: 'Sessao expirada. Entre novamente para enviar comunicados.' };
-    }
-
-    const second = await supabase.functions.invoke('push-dispatch', {
-        body,
-        headers: { Authorization: `Bearer ${refreshedToken}` }
-    });
-
-    if (!second.error) {
-        return { data: second.data, error: null };
-    }
-
-    return { data: null, error: await extractEdgeInvokeError(second.error) };
+const resolveNotificationRecipientsByTarget = async (
+    target: 'ALL' | 'CUSTOMER' | 'PHARMACY'
+): Promise<string[]> => {
+    let query = supabase.from('profiles').select('id').limit(2000);
+    if (target !== 'ALL') query = query.eq('role', target);
+    const { data, error } = await query;
+    if (error) return [];
+    return (data || []).map((row: any) => String(row.id || '')).filter(Boolean);
 };
+
+const persistSystemNotificationFallback = async (
+    recipientIds: string[],
+    title: string,
+    message: string,
+    type: string = 'SYSTEM'
+): Promise<boolean> => {
+    const cleanRecipients = Array.from(new Set(recipientIds.map((id) => String(id || '').trim()).filter(Boolean)));
+    if (!cleanRecipients.length) return true;
+    const rows = cleanRecipients.map((userId) => ({
+        user_id: userId,
+        title,
+        message,
+        type: String(type || 'SYSTEM').trim().toUpperCase(),
+        is_read: false
+    }));
+    const { error } = await supabase.from('notifications').insert(rows);
+    return !error;
+};
+
 
 export const sendSystemNotification = async (
     target: 'ALL' | 'CUSTOMER' | 'PHARMACY',
     title: string,
-    message: string
+    message: string,
+    category: 'GENERAL' | 'MARKETING' = 'GENERAL'
 ): Promise<NotificationDispatchResult> => {
     try {
+        const notificationType = category === 'MARKETING' ? 'MARKETING' : 'SYSTEM';
         const body = {
             title,
             message,
-            type: 'SYSTEM',
+            type: notificationType,
             target,
             page: target === 'PHARMACY' ? 'pharmacy-orders' : 'home',
             persistNotification: true
         };
-        const { data, error } = await invokePushDispatchWithAutoRefresh(body);
-        if (error) return { success: false, error };
+        const { data, error } = await invokePushDispatchWithAuth(
+            body,
+            'Sessao expirada. Entre novamente para enviar comunicados.'
+        );
+        if (error) {
+            if (isJwtLikeDispatchError(error)) {
+                const recipients = await resolveNotificationRecipientsByTarget(target);
+                const persisted = await persistSystemNotificationFallback(recipients, title, message, notificationType);
+                if (persisted) {
+                    return {
+                        success: true,
+                        details: {
+                            success: true,
+                            sent: 0,
+                            failed: 0,
+                            recipients: recipients.length,
+                            reason: 'fallback_db_due_jwt_error'
+                        }
+                    };
+                }
+            }
+            return { success: false, error };
+        }
         if (!data?.success) return { success: false, error: data?.error || data?.reason || 'Push não enviado.', details: data };
         return { success: true, details: data };
     } catch (e: any) {
@@ -525,23 +519,45 @@ export const sendSystemNotificationToUser = async (
     userId: string,
     title: string,
     message: string,
-    page: string = 'home'
+    page: string = 'home',
+    category: 'GENERAL' | 'MARKETING' = 'GENERAL'
 ): Promise<NotificationDispatchResult> => {
     try {
         if (!userId || !title.trim() || !message.trim()) {
             return { success: false, error: 'Destinatário, assunto e mensagem são obrigatórios.' };
         }
 
+        const notificationType = category === 'MARKETING' ? 'MARKETING' : 'SYSTEM';
         const body = {
             singleUserId: userId,
             title: title.trim(),
             message: message.trim(),
-            type: 'SYSTEM',
+            type: notificationType,
             page,
             persistNotification: true
         };
-        const { data, error } = await invokePushDispatchWithAutoRefresh(body);
-        if (error) return { success: false, error };
+        const { data, error } = await invokePushDispatchWithAuth(
+            body,
+            'Sessao expirada. Entre novamente para enviar comunicados.'
+        );
+        if (error) {
+            if (isJwtLikeDispatchError(error)) {
+                const persisted = await persistSystemNotificationFallback([userId], title.trim(), message.trim(), notificationType);
+                if (persisted) {
+                    return {
+                        success: true,
+                        details: {
+                            success: true,
+                            sent: 0,
+                            failed: 0,
+                            recipients: 1,
+                            reason: 'fallback_db_due_jwt_error'
+                        }
+                    };
+                }
+            }
+            return { success: false, error };
+        }
         if (!data?.success) return { success: false, error: data?.error || data?.reason || 'Push não enviado.', details: data };
         return { success: true, details: data };
     } catch (e: any) {
@@ -1210,5 +1226,4 @@ export const openSupportWhatsApp = async (message?: string): Promise<boolean> =>
         return false;
     }
 };
-
 

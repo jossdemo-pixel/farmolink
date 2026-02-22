@@ -1,5 +1,5 @@
 ﻿
-import { supabase, safeQuery } from './supabaseClient';
+import { supabase, safeQuery, enforceSessionProjectMatch } from './supabaseClient';
 import { User, UserRole } from '../types';
 import { clearAllCache } from './dataService';
 import { enqueueOfflineAction, isOfflineNow } from './offlineService';
@@ -199,6 +199,9 @@ export const updateUserPassword = async (password: string): Promise<{ success: b
 };
 
 export const getCurrentUser = async (): Promise<User | null> => {
+  const isSessionValid = await enforceSessionProjectMatch();
+  if (!isSessionValid) return null;
+
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.user) return null;
 

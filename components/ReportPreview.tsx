@@ -186,7 +186,7 @@ export const ReportPreview: React.FC<ReportPreviewProps> = ({ report, data, onBa
             new Paragraph({ children: [new PageBreak()] }),
 
             createPara([createTitle("6. ANEXOS", 28)], AlignmentType.CENTER, 400),
-            ...(data.anexosBase64?.map(imgBase64 => {
+            ...(data.anexosBase64?.map((imgBase64: string) => {
               const bytes = safeBase64ToUint8Array(imgBase64);
               if (bytes) {
                 return new Paragraph({
@@ -202,7 +202,7 @@ export const ReportPreview: React.FC<ReportPreviewProps> = ({ report, data, onBa
                 });
               }
               return null;
-            }).filter(p => p !== null) || [])
+            }).filter((p: any) => p !== null) || [])
           ]
         }]
       });
@@ -328,7 +328,7 @@ export const ReportPreview: React.FC<ReportPreviewProps> = ({ report, data, onBa
           <h2 className="font-bold mb-10 uppercase text-center">6. ANEXOS</h2>
           <div className="grid grid-cols-1 gap-8 items-center">
             {data.anexosBase64 && data.anexosBase64.length > 0 ? (
-              data.anexosBase64.map((img, i) => (
+              data.anexosBase64.map((img: string, i: number) => (
                 <div key={i} className="flex flex-col items-center gap-2">
                   <img src={img} alt={`Anexo ${i}`} className="max-h-[15cm] object-contain border border-slate-200 shadow-sm" />
                   <p className="text-sm italic text-slate-500">Figura {i + 1}: Evidência de atividade prática em campo.</p>
